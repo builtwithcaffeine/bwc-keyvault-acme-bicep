@@ -37,11 +37,10 @@ foreach ($app in $appList) {
 >
 ``` powershell
 git clone https://github.com/builtwithcaffeine/bwc-keyvault-acme-bicep.git
-cd bwc-keyvault-acme-bicep
+Set-Location -Path 'bwc-keyvault-acme-bicep'
 ```
 ## Configure Parameters
 Open `deployNow.ps1` and customize the parameters in the `$kvacmeparams` hash table to suit your environment:
-
 
 ``` powershell
 # Key Vault ACME Parameters
