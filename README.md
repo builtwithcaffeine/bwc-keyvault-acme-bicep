@@ -46,23 +46,25 @@ Open `deployNow.ps1` and customize the parameters in the `$kvacmeparams` hash ta
 ``` powershell
 # Key Vault ACME Parameters
 $kvacmeparams = @{
-    spName               = "sp-kvacme-letsencrypt-$environmentType"
-    funcName             = "func-kvacme-$environmentType-$locationShortCode"
-    entraIdGroup         = "sec-kvacme-funcapp-portal-$environmentType"
+    spName                    = "sp-kvacme-letsencrypt-$environmentType"
+    funcName                  = "func-kvacme-$environmentType-$locationShortCode"
+    entraIdGroup              = "sec-kvacme-funcapp-portal-$environmentType"
 
-    virtualNetworkCidr   = "192.168.0.0/24"
-    virtualNetworkSubnet = "192.168.0.0/24"
+    virtualNetworkCidr        = "192.168.0.0/24"
+    virtualNetworkSubnet      = "192.168.0.0/24"
 
-    acmeMailAddress      = "alerts@builtwithcaffeine.cloud"
-    acmeEndPoint         = "https://acme-v02.api.letsencrypt.org/"
+    acmeMailAddress           = "alerts@builtwithcaffeine.cloud"
+    acmeEndPoint              = "https://acme-v02.api.letsencrypt.org/"
 
-    resourceGroupName    = "rg-kvacme-$environmentType-$locationShortCode"
-    virtualNetworkName   = "vnet-kvacme-$environmentType-$locationShortCode"
-    storageAccountName   = "stgkvacme$locationShortCode"
-    keyVaultName         = "kv-kvacme-$environmentType-$locationShortCode"
-    appInsightsName      = "appi-kvacme-$environmentType-$locationShortCode"
-    appServicePlanName   = "asp-kvacme-$environmentType-$locationShortCode"
-    functionAppName      = "func-kvacme-$environmentType-$locationShortCode"
+    resourceGroupName         = "rg-kvacme-$environmentType-$locationShortCode"
+    virtualNetworkName        = "vnet-kvacme-$environmentType-$locationShortCode"
+    managedIdentityName       = "id-kvacme-$environmentType-$locationShortCode"
+    keyVaultName              = "kv-kvacme-$environmentType-$locationShortCode"
+    storageAccountName        = "stgkvacme$locationShortCode"
+    logAnalyticsWorkspaceName = "log-kvacme-$environmentType-$locationShortCode"
+    appInsightsName           = "appi-kvacme-$environmentType-$locationShortCode"
+    appServicePlanName        = "asp-kvacme-$environmentType-$locationShortCode"
+    functionAppName           = "func-kvacme-$environmentType-$locationShortCode"
 }
 ```
 
