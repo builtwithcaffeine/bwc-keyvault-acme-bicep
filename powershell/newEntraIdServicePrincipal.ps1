@@ -86,7 +86,7 @@ function New-EntraIdServicePrincipal {
         14dad69e-099b-42c9-810b-d002981feec1=Scope `
         --only-show-errors --output none
 
-    Write-Host "Service Principal Created: $spAppId)"
+    Write-Host "Service Principal Created: $spAppId"
 
     # Return a hashtable with the appId and appSecret
     return @{
