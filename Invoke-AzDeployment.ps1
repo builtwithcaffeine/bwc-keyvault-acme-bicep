@@ -280,8 +280,8 @@ function Get-BicepParamValues {
 
     # Parse and return param spName, param functionAppName, and param customerName
     return @{
-        spName       = ($bicepParamContent | Select-String -Pattern 'param spName' | ForEach-Object { ($_ -split '=')[1].Trim() }).Trim("'")
-        funcName     = ($bicepParamContent | Select-String -Pattern 'param functionAppName' | ForEach-Object { ($_ -split '=')[1].Trim() }).Trim("'")
+        spName   = ($bicepParamContent | Select-String -Pattern 'param spName' | ForEach-Object { ($_ -split '=')[1].Trim() }).Trim("'")
+        funcName = ($bicepParamContent | Select-String -Pattern 'param functionAppName' | ForEach-Object { ($_ -split '=')[1].Trim() }).Trim("'")
     }
 }
 
@@ -443,6 +443,21 @@ if ($deploy) {
         spAppId=$($spApp["appId"]) `
         spAuthSecret=$($spApp["appSecret"]) `
         --confirm-with-what-if `
+        --output none
+
+    # Get the Function App System Assigned Identity Id
+    $funcSystemIdentity = az deployment sub show -n "iac-$deployGuid" --query 'properties.outputs.systemAssignedIdentityId.value' -o 'tsv'
+    $keyVaultName = az deployment sub show -n "iac-$deployGuid" --query 'properties.outputs.keyVaultName.value' -o 'tsv'
+
+    # Add the Function App System Assigned Identity to Key Vault Access Policies
+    Write-Output "Adding Function App System Assigned Identity to Key Vault Access Policies..."
+
+    az keyvault set-policy `
+        --name $keyVaultName  `
+        --object-id $funcSystemIdentity `
+        --key-permissions get list create update delete `
+        --secret-permissions get list set delete `
+        --certificate-permissions get list create update delete `
         --output none
 
     $deployEndTime = Get-Date -Format 'HH:mm:ss'

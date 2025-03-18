@@ -11,6 +11,9 @@ param environmentType = 'dev'
 param location = ''
 param locationShortCode = ''
 
+// Enable Private End Point Configuration and Virtual Network Configuration
+param enablePrivateEndPoint = false
+
 //
 var customerName = 'bwc'
 

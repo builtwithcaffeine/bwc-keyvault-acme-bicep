@@ -3,6 +3,10 @@ var tenantId = subscription().tenantId
 
 // Imported Values
 
+// Module: Create Virtual Network
+@description('Enable Private Endpoint')
+param enablePrivateEndPoint bool
+
 @description('The Subscription ID')
 param subscriptionId string
 
@@ -77,7 +81,7 @@ var acmebotAppSettings = {
   WEBSITE_CONTENTSHARE: toLower(functionAppName)
   WEBSITE_RUN_FROM_PACKAGE: keyvaultAcmePackageUrl
   FUNCTIONS_EXTENSION_VERSION: '~4'
-  FUNCTIONS_WORKER_RUNTIME: ''
+  FUNCTIONS_WORKER_RUNTIME: 'dotnet'
 
   // Key Vault ACME Configuration
   'Acmebot:Contacts': acmeMailAddress
@@ -110,8 +114,9 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.1' = 
   }
 }
 
-// Module: Create Virtual Network
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = {
+
+
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = if (enablePrivateEndPoint) {
   name: 'create-virtual-network'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -127,6 +132,8 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = 
     createResourceGroup
   ]
 }
+
+
 
 // Module: Create User Managed Identity
 module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.0' = {
@@ -377,3 +384,5 @@ module createRoleAssignmentPrivateDnsZoneContributor 'modules/role-assignment/su
   ]
 }
 
+output systemAssignedIdentityId string = createFunctionApp.outputs.systemAssignedMIPrincipalId
+output keyVaultName string = createKeyVault.outputs.name
