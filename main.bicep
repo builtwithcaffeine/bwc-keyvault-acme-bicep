@@ -3,8 +3,15 @@ var tenantId = subscription().tenantId
 
 // Imported Values
 
+// Module: Create Virtual Network
+@description('Enable Private Endpoint')
+param enablePrivateEndPoint bool
+
 @description('The Subscription ID')
 param subscriptionId string
+
+@description('The Service Principal Name')
+param spName string
 
 @description('The Entra Id App ID of the Service Principal')
 param spAppId string
@@ -29,6 +36,9 @@ param environmentType string
 
 @description('Location')
 param location string
+
+@description('Location Short Code')
+param locationShortCode string
 
 @description('Tags')
 param tags object = {
@@ -71,7 +81,7 @@ var acmebotAppSettings = {
   WEBSITE_CONTENTSHARE: toLower(functionAppName)
   WEBSITE_RUN_FROM_PACKAGE: keyvaultAcmePackageUrl
   FUNCTIONS_EXTENSION_VERSION: '~4'
-  FUNCTIONS_WORKER_RUNTIME: ''
+  FUNCTIONS_WORKER_RUNTIME: 'dotnet'
 
   // Key Vault ACME Configuration
   'Acmebot:Contacts': acmeMailAddress
@@ -90,12 +100,12 @@ var acmebotAppSettings = {
   'Acmebot:AzureDns:SubscriptionId': subscriptionId
   'Acmebot:AzurePrivateDns:SubscriptionId': subscriptionId
 }
+
 //
-// ** Modules **
-//
+//  Modules
 
 // Module: Create Resource Group
-module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.0' = {
+module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.1' = {
   name: 'create-resource-group'
   params: {
     name: resourceGroupName
@@ -104,8 +114,7 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.0' = 
   }
 }
 
-// Module: Create Virtual Network
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.1' = {
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = if (enablePrivateEndPoint) {
   name: 'create-virtual-network'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -137,7 +146,7 @@ module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assign
 }
 
 // Module: Create Key Vault
-module createKeyVault 'br/public:avm/res/key-vault/vault:0.11.0' = {
+module createKeyVault 'br/public:avm/res/key-vault/vault:0.12.1' = {
   name: 'create-key-vault'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -190,7 +199,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.11.0' = {
 }
 
 // Module: Create Storage Account
-module createStorageAccount 'br/public:avm/res/storage/storage-account:0.15.0' = {
+module createStorageAccount 'br/public:avm/res/storage/storage-account:0.18.2' = {
   name: 'create-storage-account'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -204,10 +213,10 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.15.0' =
       defaultAction: 'Allow'
     }
     secretsExportConfiguration: {
-      accessKey1: 'accessKey1'
-      accessKey2: 'accessKey2'
-      connectionString1: 'connectionString1'
-      connectionString2: 'connectionString2'
+      accessKey1Name: 'accessKey1'
+      accessKey2Name: 'accessKey2'
+      connectionString1Name: 'connectionString1'
+      connectionString2Name: 'connectionString2'
       keyVaultResourceId: createKeyVault.outputs.resourceId
     }
     tags: tags
@@ -218,13 +227,14 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.15.0' =
 }
 
 // Module: Create Log Analytics Workspace
-module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.9.0' = {
+module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.11.1' = {
   name: 'create-log-analytics-workspace'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: logAnalyticsWorkspaceName
     location: location
     skuName: 'PerGB2018'
+    dataRetention: 30
     tags: tags
   }
   dependsOn: [
@@ -233,7 +243,7 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
 }
 
 // Module: Create Application Insights
-module createAppInsights 'br/public:avm/res/insights/component:0.4.2' = {
+module createAppInsights 'br/public:avm/res/insights/component:0.6.0' = {
   name: 'create-app-insights'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -248,7 +258,7 @@ module createAppInsights 'br/public:avm/res/insights/component:0.4.2' = {
 }
 
 // Module: Create App Service Plan
-module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.4.0' = {
+module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.4.1' = {
   name: 'create-app-service-plan'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -264,7 +274,7 @@ module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.4.0' = {
 }
 
 // Module: Create Function App
-module createFunctionApp 'br/public:avm/res/web/site:0.12.0' = {
+module createFunctionApp 'br/public:avm/res/web/site:0.15.1' = {
   name: 'create-function-app'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -300,6 +310,11 @@ module createFunctionApp 'br/public:avm/res/web/site:0.12.0' = {
       http20Enabled: true
       netFrameworkVersion: 'v8.0'
       minTlsVersion: '1.3'
+      cors: {
+        allowedOrigins: [
+          'https://portal.azure.com'
+        ]
+      }
     }
     authSettingV2Configuration: {
       identityProviders: {
@@ -334,6 +349,34 @@ module createFunctionApp 'br/public:avm/res/web/site:0.12.0' = {
     createStorageAccount
     createAppInsights
     createKeyVault
+  ]
+}
+
+module createRoleAssignmentDnsZoneContributor 'modules/role-assignment/subscription/main.bicep' = {
+  name: 'create-role-assignment-dns-zone-contributor'
+  scope: subscription()
+  params: {
+    principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId
+    roleDefinitionIdOrName: '/providers/Microsoft.Authorization/roleDefinitions/befefa01-2a29-4197-83a8-272ff33ce314' // DNS Zone Contributor
+    principalType: 'ServicePrincipal'
+    subscriptionId: subscriptionId
+  }
+  dependsOn: [
+    createFunctionApp
+  ]
+}
+
+module createRoleAssignmentPrivateDnsZoneContributor 'modules/role-assignment/subscription/main.bicep' = {
+  name: 'create-role-assignment-private-dns-zone-contributor'
+  scope: subscription()
+  params: {
+    principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId
+    roleDefinitionIdOrName: '/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f' // Private DNS Zone Contributor
+    principalType: 'ServicePrincipal'
+    subscriptionId: subscriptionId
+  }
+  dependsOn: [
+    createFunctionApp
   ]
 }
 
