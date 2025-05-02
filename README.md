@@ -2,7 +2,7 @@
 This repository is based on the keyvault-acmebot project, which is an open-source tool designed to automate the issuance and renewal of SSL/TLS certificates using the ACME (Automated Certificate Management Environment) protocol, specifically integrating with Azure Key Vault.
 
 > [!NOTE]
-> This side project is being activily worked on. I'm currently looking at the Private EndPoint configuration options to ensure a more secure deployment option. - 
+> This side project is being activily worked on. I'm currently looking at the Private EndPoint configuration options to ensure a more secure deployment option. -
 > Simon - December 2024
 
 ## Project Overview
@@ -26,6 +26,10 @@ This project simplifies SSL certificate management for Azure users, reducing the
 This said though, the Keyvault ACME project supports lots more DNS Providers. [DNS-Provider-Configuration](https://github.com/shibayan/keyvault-acmebot/wiki/DNS-Provider-Configuration)
 
 ## Deployment Instructions
+
+> [!IMPORTANT]
+> Please note, this solution uses **Access Policies** for Access/Authentication
+
 ### Prerequisites
 Before you begin, ensure that you have both Azure CLI and Azure Bicep installed. To install, run the following in an administrative context:
 
@@ -45,38 +49,56 @@ git clone https://github.com/builtwithcaffeine/bwc-keyvault-acme-bicep.git
 Set-Location -Path 'bwc-keyvault-acme-bicep'
 ```
 ## Configure Parameters
-Open `deployNow.ps1` and customize the parameters in the `$kvacmeparams` hash table to suit your environment:
+Open `main.bicepparam`
 
-``` powershell
-# Key Vault ACME Parameters
-$kvacmeparams = @{
-    spName                    = "sp-kvacme-letsencrypt-$environmentType"
-    funcName                  = "func-kvacme-$environmentType-$locationShortCode"
-    entraIdGroup              = "sec-kvacme-funcapp-portal-$environmentType"
+``` bicep
+using './main.bicep'
 
-    virtualNetworkCidr        = "192.168.0.0/24"
-    virtualNetworkSubnet      = "192.168.0.0/24"
+// Default Values
+param subscriptionId = ''
+param spAppId = ''
+param spAuthSecret = ''
+param userId = ''
+param deployedBy = ''
+param environmentType = 'dev'
+param location = ''
+param locationShortCode = ''
 
-    acmeMailAddress           = "alerts@builtwithcaffeine.cloud"
-    acmeEndPoint              = "https://acme-v02.api.letsencrypt.org/"
+// Enable Private End Point Configuration and Virtual Network Configuration
+param enablePrivateEndPoint = false
 
-    resourceGroupName         = "rg-kvacme-$environmentType-$locationShortCode"
-    virtualNetworkName        = "vnet-kvacme-$environmentType-$locationShortCode"
-    managedIdentityName       = "id-kvacme-$environmentType-$locationShortCode"
-    keyVaultName              = "kv-kvacme-$environmentType-$locationShortCode"
-    storageAccountName        = "stgkvacme$locationShortCode"
-    logAnalyticsWorkspaceName = "log-kvacme-$environmentType-$locationShortCode"
-    appInsightsName           = "appi-kvacme-$environmentType-$locationShortCode"
-    appServicePlanName        = "asp-kvacme-$environmentType-$locationShortCode"
-    functionAppName           = "func-kvacme-$environmentType-$locationShortCode"
-}
+// Customer Name
+var customerName = 'bwc'
+
+// Service Principal Name
+param spName = 'sp-${customerName}-kvacme-letsencrypt-${environmentType}'
+
+// Resource Names
+param resourceGroupName = 'rg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param managedIdentityName = 'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param keyVaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param storageAccountName = 'st${customerName}kvacme${locationShortCode}'
+param logAnalyticsWorkspaceName = 'log-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param appInsightsName = 'appi-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param appServicePlanName = 'asp-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param functionAppName = 'func-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+
+// Network Parameters
+param virtualNetworkCidr = '192.168.0.0/24'
+param virtualNetworkSubnet = '192.168.0.0/24'
+
+// Key Vault ACME Parameters
+param acmeMailAddress = 'alerts@builtwithcaffeine.cloud'
+param acmeEndPoint = 'https://acme-v02.api.letsencrypt.org/'
+
 ```
 
 ## Execute the Bicep Deployment
 Run the deployment script to create and configure the necessary resources. Replace <subscription-id> with your Azure subscription ID, and specify the environment type (e.g., [dev], [acc], or [prod]):
 
 ``` powershell
-.\deployNow.ps1 -subscriptionId <subscription-id> -environmentType [dev|acc|prod] -location westeurope -deploy
+.\Invoke-AzDeployment.ps1 -targetScope 'sub' -subscriptionId '00000000-0000-0000-0000-000000000000' -environmentType 'dev' -location 'westeurope' -deploy
 ```
 
 ### Deployment Diagram
@@ -88,7 +110,7 @@ Once the deployment is completed, (Takes around 5 miuntes, after 6 hours of buil
 
 ![](https://github.com/user-attachments/assets/95de93b9-3a16-442d-8fe8-8782374969b8)
 
-### First Time 
+### First Time
 When you first open the function app, You'll need to authenticate the Enterprise App.
 
 ![](https://github.com/user-attachments/assets/491bd256-f77b-47c0-8c7b-9b0465dcc42d)
@@ -110,16 +132,10 @@ From the DNS Zone, You can pick from Azure Public DNS or Azure Private DNS Zone.
 
 </details>
 
-Click Add, 
+Click Add,
 
 ![](https://github.com/user-attachments/assets/5ad558b0-cc8f-4bfc-b859-2aab91255ee9)
 
-Finally, Checking the Azure Key Vault we can see the certificate 
+Finally, Checking the Azure Key Vault we can see the certificate
 
 ![](https://github.com/user-attachments/assets/542e0a5c-b0e1-4884-ad84-86047579c9d1)
-
-
-> [!IMPORTANT]
-> Please note, this solution uses **Access Policies** for Access/Authentication
-
-

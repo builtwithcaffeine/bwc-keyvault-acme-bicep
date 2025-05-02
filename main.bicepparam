@@ -20,7 +20,7 @@ var customerName = 'bwc'
 param spName = 'sp-${customerName}-kvacme-letsencrypt-${environmentType}'
 
 // Resource Names
-param resourceGroupName = 'rg-x-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param resourceGroupName = 'rg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 param managedIdentityName = 'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 param keyVaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
