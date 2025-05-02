@@ -1,7 +1,6 @@
 using './main.bicep'
 
 // Default Values
-
 param subscriptionId = ''
 param spAppId = ''
 param spAuthSecret = ''
@@ -14,7 +13,7 @@ param locationShortCode = ''
 // Enable Private End Point Configuration and Virtual Network Configuration
 param enablePrivateEndPoint = false
 
-//
+// Customer Name
 var customerName = 'bwc'
 
 // Service Principal Name
@@ -38,4 +37,3 @@ param virtualNetworkSubnet = '192.168.0.0/24'
 // Key Vault ACME Parameters
 param acmeMailAddress = 'alerts@builtwithcaffeine.cloud'
 param acmeEndPoint = 'https://acme-v02.api.letsencrypt.org/'
-

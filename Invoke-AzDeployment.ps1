@@ -215,35 +215,47 @@ function Get-BicepVersion {
 
 # Get Azure User/Service Principal Identity
 function Get-AzIdentity {
-    # Get Identity Type
-    $azIdentity = az account show | ConvertFrom-Json
+    try {
+        # Get Identity Type
+        $azIdentity = az account show --output json | ConvertFrom-Json
 
-    if ($azIdentity.user.type -eq 'servicePrincipal') {
-        $spDisplayName = az ad sp show --id (az account show --query 'user.name' -o 'tsv') --query 'displayName' -o 'tsv'
+        if ($azIdentity.user.type -eq 'servicePrincipal') {
+            $spDisplayName = az ad sp show --id $azIdentity.user.name --query 'displayName' -o tsv
+
+            Write-Host "Azure Identity Type...: Service Principal"
+            Write-Host "Service Principal.....: $spDisplayName"
+            $azIdentityName = $spDisplayName
+
+        }
+        elseif ($azIdentity.user.type -eq 'user') {
+            $azUserAccountName = $azIdentity.user.name
+            Write-Host "Azure Identity Type...: User"
+            Write-Host "User Account Email....: $azUserAccountName"
+            $azIdentityName = $azUserAccountName
+        }
+        else {
+            Write-Warning "Unknown Azure Identity Type: $($azIdentity.user.type)"
+            return $null
+        }
+
+        # Get Role Assignments
+        $rbacAssignments = az role assignment list --assignee $azIdentity.user.name --output json | ConvertFrom-Json
+        if ($rbacAssignments) {
+            $roles = $rbacAssignments | Select-Object -ExpandProperty roleDefinitionName -Unique
+            Write-Host "RBAC Assignments......: $($roles -join ', ')"
+        }
+        else {
+            Write-Warning "No RBAC assignments found for the identity."
+        }
+
+        # Return Azure Identity Name
+        return $azIdentityName
+
     }
-
-    if ($azIdentity.user.type -eq 'user') {
-        $azUserAccountName = az account show --query 'user.name' -o 'tsv'
+    catch {
+        Write-Error "Failed to retrieve Azure identity information: $_"
+        return $null
     }
-
-    Write-Host "Azure Identity Information:"
-    Write-Host "Identity Type.........: $($azIdentity.user.type)"
-    if ($azIdentity.user.type -eq 'servicePrincipal') {
-        Write-Host "Service Principal.....: $spDisplayName"
-        $azIdentityName = $spDisplayName
-    }
-
-    if ($azIdentity.user.type -eq 'user') {
-        Write-Host "User Account Email....: $azUserAccountName"
-        $azIdentityName = $azUserAccountName
-    }
-
-    # Get Role Base Assignments
-    $rbacAssignment = az role assignment list --assignee $azIdentity.user.name --output json | ConvertFrom-Json
-    Write-Host "RBAC Assignment.......: $($rbacAssignment.RoleDefinitionName)"
-
-    # Return Azure Identity Value
-    return $azIdentityName
 }
 
 # Generate Random Password

@@ -114,8 +114,6 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.1' = 
   }
 }
 
-
-
 module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = if (enablePrivateEndPoint) {
   name: 'create-virtual-network'
   scope: resourceGroup(resourceGroupName)
@@ -132,8 +130,6 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = 
     createResourceGroup
   ]
 }
-
-
 
 // Module: Create User Managed Identity
 module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.0' = {

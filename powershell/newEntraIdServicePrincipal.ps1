@@ -46,7 +46,7 @@ function New-EntraIdServicePrincipal {
     $existingApp = az ad app list --display-name $spName --query "[].appId" -o 'tsv'
 
     if ($existingApp) {
-        Write-Host "`nAn application with the name $spName already exists with AppId: $existingApp. Removing it."
+        Write-Host `n"An application with the name $spName already exists with AppId: $existingApp. Removing it."
 
         # Remove the existing application
         az ad app delete --id $existingApp
@@ -59,7 +59,7 @@ function New-EntraIdServicePrincipal {
     $funcUrlCallBack = "https://$funcName.azurewebsites.net/.auth/login/aad/callback"
 
     # Create a new Azure AD application
-    Write-Host "`nCreating Entra Id Enterprise Application: $spName"
+    Write-Host `n"Creating Entra Id Enterprise Application: $spName"
     $app = az ad app create `
         --display-name $spName `
         --enable-id-token-issuance true `
@@ -71,7 +71,7 @@ function New-EntraIdServicePrincipal {
     Write-Host "Enterprise Application Created: $($app.appId)"
 
     # Create a new service principal for the application
-    Write-Host "`nCreating Entra Id Service Principal: $spName"
+    Write-Host `n"Creating Entra Id Service Principal: $spName"
     $spAppId = az ad sp create --id $app.appId --query 'appId' --output 'tsv'
     $spAppSecret = az ad app credential reset --id $spAppId --query 'password' --output 'tsv' --only-show-errors
 
