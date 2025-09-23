@@ -1,0 +1,255 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "17522370156094628198"
+    },
+    "name": "Microsoft Graph Service Principals",
+    "description": "Creates and configures Azure AD service principals",
+    "owner": "Platform Team"
+  },
+  "parameters": {
+    "appId": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Application ID of the application to create service principal for"
+      }
+    },
+    "displayName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Display name for the service principal"
+      }
+    },
+    "servicePrincipalDescription": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Description of the service principal"
+      }
+    },
+    "accountEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Optional. Whether the service principal account is enabled"
+      }
+    },
+    "appRoleAssignmentRequired": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether app role assignment is required for this service principal"
+      }
+    },
+    "alternativeNames": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Alternative names for the service principal"
+      }
+    },
+    "homepage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Homepage URL"
+      }
+    },
+    "loginUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Login URL"
+      }
+    },
+    "logoutUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Logout URL"
+      }
+    },
+    "replyUrls": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Reply URLs for the service principal"
+      }
+    },
+    "servicePrincipalType": {
+      "type": "string",
+      "defaultValue": "Application",
+      "metadata": {
+        "description": "Optional. Service principal type"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Tags for the service principal"
+      }
+    },
+    "notes": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Notes for the service principal"
+      }
+    },
+    "notificationEmailAddresses": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Notification email addresses"
+      }
+    },
+    "preferredSingleSignOnMode": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Preferred single sign-on mode"
+      }
+    },
+    "appRoles": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. App roles for the service principal"
+      }
+    },
+    "oauth2PermissionScopes": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. OAuth2 permission scopes"
+      }
+    },
+    "keyCredentials": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Key credentials"
+      }
+    },
+    "passwordCredentials": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Password credentials"
+      }
+    },
+    "ownerIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Owner object IDs"
+      }
+    },
+    "info": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Application info URLs"
+      }
+    }
+  },
+  "variables": {
+    "ownersConfig": "[if(not(empty(parameters('ownerIds'))), createObject('relationships', parameters('ownerIds'), 'relationshipSemantics', 'replace'), null())]"
+  },
+  "imports": {
+    "microsoftGraphV1": {
+      "provider": "MicrosoftGraph",
+      "version": "1.0.0"
+    }
+  },
+  "resources": {
+    "servicePrincipal": {
+      "import": "microsoftGraphV1",
+      "type": "Microsoft.Graph/servicePrincipals@v1.0",
+      "properties": {
+        "appId": "[parameters('appId')]",
+        "displayName": "[if(not(empty(parameters('displayName'))), parameters('displayName'), null())]",
+        "description": "[if(not(empty(parameters('servicePrincipalDescription'))), parameters('servicePrincipalDescription'), null())]",
+        "accountEnabled": "[parameters('accountEnabled')]",
+        "appRoleAssignmentRequired": "[parameters('appRoleAssignmentRequired')]",
+        "alternativeNames": "[parameters('alternativeNames')]",
+        "homepage": "[if(not(empty(parameters('homepage'))), parameters('homepage'), null())]",
+        "loginUrl": "[if(not(empty(parameters('loginUrl'))), parameters('loginUrl'), null())]",
+        "logoutUrl": "[if(not(empty(parameters('logoutUrl'))), parameters('logoutUrl'), null())]",
+        "replyUrls": "[parameters('replyUrls')]",
+        "servicePrincipalType": "[parameters('servicePrincipalType')]",
+        "tags": "[parameters('tags')]",
+        "notes": "[if(not(empty(parameters('notes'))), parameters('notes'), null())]",
+        "notificationEmailAddresses": "[parameters('notificationEmailAddresses')]",
+        "preferredSingleSignOnMode": "[if(not(empty(parameters('preferredSingleSignOnMode'))), parameters('preferredSingleSignOnMode'), null())]",
+        "appRoles": "[parameters('appRoles')]",
+        "oauth2PermissionScopes": "[parameters('oauth2PermissionScopes')]",
+        "keyCredentials": "[parameters('keyCredentials')]",
+        "passwordCredentials": "[parameters('passwordCredentials')]",
+        "owners": "[variables('ownersConfig')]",
+        "info": "[if(not(empty(parameters('info'))), parameters('info'), null())]"
+      },
+      "metadata": {
+        "description": "Microsoft Graph Service Principal"
+      }
+    }
+  },
+  "outputs": {
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource ID of the service principal"
+      },
+      "value": "[reference('servicePrincipal').id]"
+    },
+    "servicePrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "The service principal ID (object ID)"
+      },
+      "value": "[reference('servicePrincipal').id]"
+    },
+    "appId": {
+      "type": "string",
+      "metadata": {
+        "description": "The application ID"
+      },
+      "value": "[reference('servicePrincipal').appId]"
+    },
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "The display name of the service principal"
+      },
+      "value": "[reference('servicePrincipal').displayName]"
+    },
+    "accountEnabled": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether the service principal account is enabled"
+      },
+      "value": "[reference('servicePrincipal').accountEnabled]"
+    },
+    "servicePrincipalType": {
+      "type": "string",
+      "metadata": {
+        "description": "The service principal type"
+      },
+      "value": "[reference('servicePrincipal').servicePrincipalType]"
+    },
+    "appRoleAssignmentRequired": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether app role assignment is required"
+      },
+      "value": "[reference('servicePrincipal').appRoleAssignmentRequired]"
+    }
+  }
+}

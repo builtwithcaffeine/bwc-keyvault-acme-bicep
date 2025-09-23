@@ -1,0 +1,90 @@
+{
+  "$schema": "https://github.com/Azure/Verified-Modules/schemas/avmMetadata.json",
+  "type": "module", 
+  "version": "1.0.0",
+  "avm": {
+    "type": "Bicep",
+    "specVersion": "1.0"
+  },
+  "metadata": {
+    "name": "Microsoft Graph Federated Identity Credentials",
+    "description": "Configuration template for federated identity credentials for Azure AD applications enabling OIDC authentication",
+    "author": "Platform Team",
+    "version": "1.0.0",
+    "provider": "Microsoft.Graph",
+    "resourceType": "applications/federatedIdentityCredentials",
+    "apiVersion": "v1.0",
+    "documentationUrl": "https://learn.microsoft.com/en-us/graph/templates/bicep/reference/federatedidentitycredentials?view=graph-bicep-1.0"
+  },
+  "features": [
+    "GitHub Actions OIDC configuration",
+    "Azure DevOps OIDC configuration", 
+    "Multi-provider OIDC support",
+    "Environment-specific configurations",
+    "Automated CLI command generation",
+    "Comprehensive validation and best practices",
+    "Support for multiple external identity providers"
+  ],
+  "requirements": {
+    "bicep": ">=0.20.0",
+    "provider": "Microsoft.Graph",
+    "permissions": [
+      "Application.ReadWrite.All"
+    ]
+  },
+  "examples": {
+    "github": "./README.md#github-actions-oidc",
+    "azuredevops": "./README.md#azure-devops-oidc", 
+    "multi-environment": "./README.md#multiple-environment-setup",
+    "test": "./test/main.test.bicep"
+  },
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for GitHub Actions OIDC",
+        "Support for Azure DevOps OIDC",
+        "Support for Google Cloud OIDC", 
+        "Support for AWS IAM OIDC",
+        "Configuration templates and validation",
+        "Automated CLI command generation",
+        "Comprehensive documentation and examples",
+        "Multi-environment deployment scenarios"
+      ]
+    }
+  ],
+  "supportedProviders": [
+    {
+      "name": "GitHub Actions",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subjectExamples": [
+        "repo:owner/repository:ref:refs/heads/main",
+        "repo:owner/repository:environment:production",
+        "repo:owner/repository:pull_request"
+      ]
+    },
+    {
+      "name": "Azure DevOps",
+      "issuer": "https://vstoken.dev.azure.com/{organization}",
+      "subjectExamples": [
+        "sc://organization/project/serviceconnection"
+      ]
+    },
+    {
+      "name": "Google Cloud",
+      "issuer": "https://accounts.google.com", 
+      "subjectExamples": [
+        "serviceAccount:service-account@project.iam.gserviceaccount.com"
+      ]
+    },
+    {
+      "name": "AWS IAM",
+      "issuer": "arn:aws:iam::{account}:oidc-provider/token.actions.githubusercontent.com",
+      "subjectExamples": [
+        "repo:owner/repository:ref:refs/heads/main"
+      ]
+    }
+  ]
+}

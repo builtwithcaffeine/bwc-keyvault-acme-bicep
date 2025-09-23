@@ -1,0 +1,81 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "displayName": {
+      "value": "Contoso IT Security Team",
+      "metadata": {
+        "description": "Display name for the security group"
+      }
+    },
+    "groupName": {
+      "value": "contoso-it-security-team",
+      "metadata": {
+        "description": "Unique group name for Microsoft Graph resource"
+      }
+    },
+    "mailNickname": {
+      "value": "contoso-it-security",
+      "metadata": {
+        "description": "Mail nickname for the group (must be unique within organization)"
+      }
+    },
+    "groupDescription": {
+      "value": "Security group for IT team members with administrative access to corporate resources and infrastructure",
+      "metadata": {
+        "description": "Detailed description of the group's purpose and scope"
+      }
+    },
+    "securityEnabled": {
+      "value": true,
+      "metadata": {
+        "description": "Enable security features for access control and permissions"
+      }
+    },
+    "mailEnabled": {
+      "value": false,
+      "metadata": {
+        "description": "Security groups typically don't need mail functionality"
+      }
+    },
+    "visibility": {
+      "value": "Private",
+      "metadata": {
+        "description": "Private visibility for security-sensitive groups"
+      }
+    },
+    "classification": {
+      "value": "High",
+      "metadata": {
+        "description": "High classification for security groups with privileged access"
+      }
+    },
+    "isAssignableToRole": {
+      "value": false,
+      "metadata": {
+        "description": "Set to true if group will be assigned to Azure AD roles (requires Premium P1)"
+      }
+    },
+    "ownerIds": {
+      "value": [],
+      "metadata": {
+        "description": "Array of user object IDs who will be owners of this group",
+        "example": [
+          "11111111-1111-1111-1111-111111111111",
+          "22222222-2222-2222-2222-222222222222"
+        ]
+      }
+    },
+    "memberIds": {
+      "value": [],
+      "metadata": {
+        "description": "Array of user object IDs who will be initial members of this group",
+        "example": [
+          "33333333-3333-3333-3333-333333333333",
+          "44444444-4444-4444-4444-444444444444",
+          "55555555-5555-5555-5555-555555555555"
+        ]
+      }
+    }
+  }
+}

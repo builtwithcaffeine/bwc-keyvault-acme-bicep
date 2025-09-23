@@ -1,0 +1,129 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "5669396804070347701"
+    },
+    "name": "Microsoft Graph OAuth2 Permission Grants",
+    "description": "Creates and configures OAuth2 permission grants for service principals",
+    "owner": "Platform Team"
+  },
+  "parameters": {
+    "clientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. The unique identifier for the client service principal for the application which is authorized to act on behalf of a signed-in user when accessing an API"
+      }
+    },
+    "consentType": {
+      "type": "string",
+      "allowedValues": [
+        "AllPrincipals",
+        "Principal"
+      ],
+      "metadata": {
+        "description": "Required. Indicates if authorization is granted for the client application to impersonate all users or only a specific user"
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. The unique identifier for the user on whose behalf the client is authorized to access the resource when consentType is Principal. If consentType is AllPrincipals this value is null"
+      }
+    },
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. The unique identifier for the resource service principal for which the access is authorized"
+      }
+    },
+    "scope": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. A space-separated list of the claim values for delegated permissions which should be included in access tokens for the resource application"
+      }
+    }
+  },
+  "variables": {
+    "principalIdValue": "[if(or(equals(parameters('consentType'), 'AllPrincipals'), empty(parameters('principalId'))), null(), parameters('principalId'))]"
+  },
+  "imports": {
+    "microsoftGraphV1": {
+      "provider": "MicrosoftGraph",
+      "version": "1.0.0"
+    }
+  },
+  "resources": {
+    "oauth2PermissionGrant": {
+      "import": "microsoftGraphV1",
+      "type": "Microsoft.Graph/oauth2PermissionGrants@v1.0",
+      "properties": {
+        "clientId": "[parameters('clientId')]",
+        "consentType": "[parameters('consentType')]",
+        "principalId": "[variables('principalIdValue')]",
+        "resourceId": "[parameters('resourceId')]",
+        "scope": "[if(not(empty(parameters('scope'))), parameters('scope'), null())]"
+      },
+      "metadata": {
+        "description": "Microsoft Graph OAuth2 Permission Grant"
+      }
+    }
+  },
+  "outputs": {
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource ID of the OAuth2 permission grant"
+      },
+      "value": "[reference('oauth2PermissionGrant').id]"
+    },
+    "oauth2PermissionGrantId": {
+      "type": "string",
+      "metadata": {
+        "description": "The OAuth2 permission grant ID"
+      },
+      "value": "[reference('oauth2PermissionGrant').id]"
+    },
+    "clientId": {
+      "type": "string",
+      "metadata": {
+        "description": "The client service principal ID"
+      },
+      "value": "[reference('oauth2PermissionGrant').clientId]"
+    },
+    "consentType": {
+      "type": "string",
+      "metadata": {
+        "description": "The consent type"
+      },
+      "value": "[reference('oauth2PermissionGrant').consentType]"
+    },
+    "principalId": {
+      "type": "string",
+      "metadata": {
+        "description": "The principal ID (if applicable)"
+      },
+      "value": "[if(not(equals(reference('oauth2PermissionGrant').principalId, null())), reference('oauth2PermissionGrant').principalId, '')]"
+    },
+    "resourceServicePrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource service principal ID"
+      },
+      "value": "[reference('oauth2PermissionGrant').resourceId]"
+    },
+    "scope": {
+      "type": "string",
+      "metadata": {
+        "description": "The granted scopes"
+      },
+      "value": "[if(not(equals(reference('oauth2PermissionGrant').scope, null())), reference('oauth2PermissionGrant').scope, '')]"
+    }
+  }
+}

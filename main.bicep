@@ -1,110 +1,191 @@
 targetScope = 'subscription'
+
+//
+@description('Azure Subscription Id')
+var subscriptionId = subscription().subscriptionId
+
+@description('Azure Tenant Id')
 var tenantId = subscription().tenantId
 
-// Imported Values
+@description('Customer name - used for naming resources')
+param customerName string
 
-// Module: Create Virtual Network
-@description('Enable Private Endpoint')
-param enablePrivateEndPoint bool
-
-@description('The Subscription ID')
-param subscriptionId string
-
-@description('The Service Principal Name')
-param spName string
-
-@description('The Entra Id App ID of the Service Principal')
-param spAppId string
-
-@description('The Entra Id App Secret of the Service Principal')
-@secure()
-param spAuthSecret string
-
-@description('User Id for Key Vault Role Assignment')
-param userId string
-
-@description('User Principal ID')
-param deployedBy string
-
-@description('Environment Type')
-@allowed([
-  'dev'
-  'test'
-  'prod'
-])
-param environmentType string
-
-@description('Location')
+@description('Azure Location')
 param location string
 
-@description('Location Short Code')
+@description('Azure Location Short Code')
 param locationShortCode string
 
-@description('Tags')
+@description('Environment Type')
+@allowed(['dev', 'acc', 'prod'])
+param environmentType string
+
+@description('Deployed By')
+param deployedBy string
+
 param tags object = {
   environmentType: environmentType
-  deployBy: deployedBy
-  deployedOn: utcNow('yyyy-MM-dd')
-}
-
-// Resource Names
-param resourceGroupName string = ''
-param managedIdentityName string = ''
-param keyVaultName string = ''
-param logAnalyticsWorkspaceName string = ''
-param storageAccountName string = ''
-param appServicePlanName string = ''
-param appInsightsName string = ''
-param functionAppName string = ''
-
-// Virtual Network Parameters
-param virtualNetworkCidr string = ''
-param virtualNetworkSubnet string = ''
-param virtualNetworkName string = ''
-var virtualNetworkSubnets = [
-  {
-    name: 'subnet-kvacme-private-endpoint'
-    addressPrefix: virtualNetworkSubnet
-  }
-]
-
-// ACME Details
-var keyvaultAcmePackageUrl = 'https://stacmebotprod.blob.core.windows.net/keyvault-acmebot/v4/latest.zip'
-param acmeMailAddress string = ''
-param acmeEndPoint string = ''
-
-// Function App Settings
-var acmebotAppSettings = {
-  MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=spAuthSecret)'
-  WEBSITE_CONTENTAZUREFILECONNECTIONSTRING: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=connectionString1)'
-  AzureWebJobsStorage: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=connectionString1)'
-  WEBSITE_CONTENTSHARE: toLower(functionAppName)
-  WEBSITE_RUN_FROM_PACKAGE: keyvaultAcmePackageUrl
-  FUNCTIONS_EXTENSION_VERSION: '~4'
-  FUNCTIONS_WORKER_RUNTIME: 'dotnet'
-
-  // Key Vault ACME Configuration
-  'Acmebot:Contacts': acmeMailAddress
-  'Acmebot:Endpoint': acmeEndPoint
-  'Acmebot:VaultBaseUrl': createKeyVault.outputs.uri
-  'Acmebot:Environment': environment().name
-  'Acmebot:MitigateChainOrder': 'true'
-  APPINSIGHTS_INSTRUMENTATIONKEY: createAppInsights.outputs.instrumentationKey
-  APPLICATIONINSIGHTS_CONNECTION_STRING: createAppInsights.outputs.connectionString
-
-  // DNS Zone Configuration
-  // https://github.com/shibayan/keyvault-acmebot/wiki/DNS-Provider-Configuration
-
-  // Azure DNS Configuration
-  // https://github.com/shibayan/keyvault-acmebot/wiki/DNS-Provider-Configuration#azure-dns
-  'Acmebot:AzureDns:SubscriptionId': subscriptionId
-  'Acmebot:AzurePrivateDns:SubscriptionId': subscriptionId
+  deployedBy: deployedBy
+  deployedDate: utcNow('yyyy-MM-dd')
 }
 
 //
-//  Modules
+// Parameters [Created Resources]
+param resourceGroupName string = 'rg-x-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param keyvaultName string = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param userManagedIdentityName string = 'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param logAnalyticsWorkspaceName string = 'log-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param storageAccountName string = 'st${customerName}kvacme${environmentType}${locationShortCode}'
+param applicationInsightsName string = 'appi-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param appServicePlanName string = 'asp-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param functionAppName string = 'func-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Module: Create Resource Group
+//
+// Parameters [Existing Resources]
+// Imported from parameters file or passed in at deployment time
+
+@description('Shared Hub - Resource Group Name')
+param sharedResourceGroupName string
+
+@description('Shared Virtual Network Name')
+param sharedVirtualNetworkName string
+
+//
+// Azure Key Vault
+@description('Create Key Vault Resource')
+param createWithKeyVault bool
+
+@description('Existing Key Vault - Resource Group Name')
+param existingKeyVaultResourceGroup string
+
+@description('Existing Key Vault - Resource Name')
+param existingKeyVaultName string
+
+@description('Key Vault Access Policy - User Managed Identity')
+var kvAccessPolicies = [
+  {
+    objectId: createUserManagedIdentity.outputs.principalId
+    permissions: {
+      secrets: [
+        'get'
+        'list'
+      ]
+    }
+    tenantId: tenantId
+  }
+]
+
+// Key Vault ACME Values
+@description('Key Vault ACME Package URL')
+param acmeKvACMEPackage string
+
+@description('Azure Subscription Id - Public Dns Zones')
+param acmeAzurePublicDnsSubscriptionId string
+
+@description('Azure Subscription Id - Private Dns Zones')
+param acmeAzurePrivateDnsSubscriptionId string
+
+@description('Enable Public Dns Role Assignment Module')
+param enablePublicDnsRoleAssignment bool
+
+@description('Azure Public Dns Resource Group  ')
+param azurePublicDnsResourceGroup string
+
+@description('Azure Public Dns Resource Id')
+param azurePublicDnsZones array
+
+@description('Enable Private Dns Role Assignment Module')
+param enablePrivateDnsRoleAssignment bool
+
+@description('Azure Private Dns Resource Group  ')
+param azurePrivateDnsResourceGroup string
+
+@description('Azure Private Dns Resource Id')
+param azurePrivateDnsZones array
+
+@allowed([
+  'https://acme-v02.api.letsencrypt.org/directory'
+  'https://api.buypass.com/acme/directory'
+  'https://acme.zerossl.com/v2/DV90/'
+  'https://dv.acme-v02.api.pki.goog/directory'
+  'https://acme.ssl.com/sslcom-dv-rsa'
+  'https://acme.ssl.com/sslcom-dv-ecc'
+])
+@description('Lets Encrypt Public End point')
+param acmeEndpoint string
+
+@description('Azure Environment')
+param acmeEnvironment string
+
+@description('Key Vault ACME - Key Vault Reference')
+param acmeKeyVaultUrlBase string
+
+@description('Key Vault ACME - Email Contact(s)')
+param acmeContacts string
+
+//
+@description('Key Vault Name Variable')
+var selectedKeyVaultName = createWithKeyVault ? keyvaultName : existingKeyVaultName
+
+//
+// Azure Resource - [Existing]
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2024-07-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: sharedVirtualNetworkName
+}
+
+resource existingKeyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = if (!createWithKeyVault) {
+  scope: resourceGroup(existingKeyVaultResourceGroup)
+  name: existingKeyVaultName
+}
+
+// Private End Point - Key Vault
+resource privDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.vaultcore.azure.net'
+}
+
+// Private End Point - Storage Account (Blob)
+resource privDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.blob.${environment().suffixes.storage}'
+}
+
+// Private End Point - Storage Account (Table)
+resource privDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.table.${environment().suffixes.storage}'
+}
+
+// Private End Point - Storage Account (File)
+resource privDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.file.${environment().suffixes.storage}'
+}
+
+// Private End Point - Storage Account (Queue)
+resource privDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.queue.${environment().suffixes.storage}'
+}
+
+// Private End Point - Web Site
+resource privDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'privatelink.azurewebsites.net'
+}
+
+// Private End Point - Web Site SCM
+resource privDnsZoneAzureSitesSCM 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+  scope: resourceGroup(sharedResourceGroupName)
+  name: 'scm.privatelink.azurewebsites.net'
+}
+
+//
+// Azure Resource Modules - [Create]
+//
+
+// Create Resource Group
 module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.1' = {
   name: 'create-resource-group'
   params: {
@@ -114,29 +195,111 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.1' = 
   }
 }
 
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.5.4' = if (enablePrivateEndPoint) {
-  name: 'create-virtual-network'
+// Create Entra Security Group
+module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
+  name: 'create-entra-security-group'
   scope: resourceGroup(resourceGroupName)
   params: {
-    name: virtualNetworkName
-    location: location
-    addressPrefixes: [
-      virtualNetworkCidr
+    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
+    groupName: 'sec-keyvault-acme-auth-${environmentType}'
+    mailNickname: 'sec-keyvault-acme-auth-${environmentType}'
+    groupDescription: 'Key Vault ACME - Security Group'
+    ownerIds: [
     ]
-    subnets: virtualNetworkSubnets
-    tags: tags
+    memberIds: [
+    ]
+    mailEnabled: false
+    securityEnabled: true
+    visibility: 'Private'
   }
   dependsOn: [
     createResourceGroup
   ]
 }
 
-// Module: Create User Managed Identity
+// Create Application Registration
+module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' = {
+  name: 'create-entra-app-registration'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
+    appName: 'sp-kvacme-authentication-${environmentType}'
+    appDescription: 'App Registration for Key Vault ACME'
+    homePageUrl: 'https://${functionAppName}.azurewebsites.net'
+    webRedirectUris: [
+      'https://${functionAppName}.azurewebsites.net/.auth/login/aad/callback'
+    ]
+    enableIdTokenIssuance: true
+    requiredResourceAccess: [
+      // These need manually accepting in the portal once created
+      {
+        resourceAppId: '00000003-0000-0000-c000-000000000000' // Microsoft Graph
+        resourceAccess: [
+          {
+            id: '64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0' // email
+            type: 'Scope'
+          }
+          {
+            id: '37f7f235-527c-4136-accd-4a02d197296e' // openid
+            type: 'Scope'
+          }
+          {
+            id: '14dad69e-099b-42c9-810b-d002981feec1' // profile
+            type: 'Scope'
+          }
+          {
+            id: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d' // User.Read
+            type: 'Scope'
+          }
+        ]
+      }
+    ]
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
+module createFederatedCredential 'modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
+  name: 'create-entra-federated-credential'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    applicationId: createAppRegistration.outputs.uniqueName
+    name: 'KeyVaultACME-Federated-Credential-${environmentType}'
+    issuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
+    credentialDescription: 'Federated Identity Credential for Key Vault ACME - ${environmentType}'
+    subject: createUserManagedIdentity.outputs.principalId
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+  }
+  dependsOn: [
+    createAppRegistration
+  ]
+}
+
+// Create Enterprise Application
+module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bicep' = {
+  name: 'create-entra-service-principal'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    appId: createAppRegistration.outputs.applicationId
+    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
+    homepage: 'https://${functionAppName}.azurewebsites.net'
+    accountEnabled: true
+    appRoleAssignmentRequired: true
+  }
+  dependsOn: [
+    createAppRegistration
+  ]
+}
+
+// Create User Managed Identity
 module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.0' = {
   name: 'create-user-managed-identity'
   scope: resourceGroup(resourceGroupName)
   params: {
-    name: managedIdentityName
+    name: userManagedIdentityName
     location: location
     tags: tags
   }
@@ -145,50 +308,28 @@ module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assign
   ]
 }
 
-// Module: Create Key Vault
-module createKeyVault 'br/public:avm/res/key-vault/vault:0.12.1' = {
-  name: 'create-key-vault'
+// Create Key Vault - if (createWithKeyVault) - $true
+module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = if (createWithKeyVault) {
+  name: 'create-keyvault'
   scope: resourceGroup(resourceGroupName)
   params: {
-    name: keyVaultName
+    name: keyvaultName
     location: location
     sku: 'standard'
     enablePurgeProtection: false
     enableRbacAuthorization: false
-    accessPolicies: [
+    accessPolicies: kvAccessPolicies
+    privateEndpoints: [
       {
-        objectId: createUserManagedIdentity.outputs.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
+        service: 'vault'
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneKeyVault.id
+            }
           ]
         }
-        tenantId: tenantId
-      }
-      {
-        objectId: userId
-        permissions: {
-          keys: [
-            'get'
-            'list'
-          ]
-          secrets: [
-            'get'
-            'list'
-          ]
-          certificates: [
-            'get'
-            'list'
-          ]
-        }
-        tenantId: tenantId
-      }
-    ]
-    secrets: [
-      {
-        name: 'spAuthSecret'
-        value: spAuthSecret
       }
     ]
     tags: tags
@@ -198,43 +339,107 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.12.1' = {
   ]
 }
 
-// Module: Create Storage Account
-module createStorageAccount 'br/public:avm/res/storage/storage-account:0.18.2' = {
+module updateKeyVaultUserManagedIdentity 'br/public:avm/res/key-vault/vault/access-policy:0.1.0' = if (!createWithKeyVault) {
+  scope: resourceGroup(existingKeyVaultResourceGroup)
+  params: {
+    keyVaultName: existingKeyVaultName
+    accessPolicies: kvAccessPolicies
+  }
+  dependsOn: [
+    existingKeyVault
+  ]
+}
+
+module createStorageAccount 'br/public:avm/res/storage/storage-account:0.26.2' = {
   name: 'create-storage-account'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: storageAccountName
     location: location
     kind: 'StorageV2'
-    skuName: 'Standard_LRS'
-    publicNetworkAccess: 'Enabled'
-    networkAcls: {
-      bypass: 'AzureServices'
-      defaultAction: 'Allow'
-    }
+    skuName: 'Standard_ZRS'
+    tags: tags
+    publicNetworkAccess: 'Disabled'
     secretsExportConfiguration: {
       accessKey1Name: 'accessKey1'
       accessKey2Name: 'accessKey2'
       connectionString1Name: 'connectionString1'
       connectionString2Name: 'connectionString2'
-      keyVaultResourceId: createKeyVault.outputs.resourceId
+      keyVaultResourceId: createWithKeyVault ? createKeyVault!.outputs.resourceId : existingKeyVault!.id
     }
-    tags: tags
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Deny'
+    }
+    fileServices: {
+      shares: [
+        {
+          name: functionAppName
+          ShareQuota: 10
+        }
+      ]
+    }
+    privateEndpoints: [
+      {
+        service: 'blob'
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneStorageBlob.id
+            }
+          ]
+        }
+      }
+      {
+        service: 'file'
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneStorageFile.id
+            }
+          ]
+        }
+      }
+      {
+        service: 'table'
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneStorageTable.id
+            }
+          ]
+        }
+      }
+      {
+        service: 'queue'
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneStorageQueue.id
+            }
+          ]
+        }
+      }
+    ]
   }
   dependsOn: [
     createKeyVault
+    createResourceGroup
   ]
 }
 
-// Module: Create Log Analytics Workspace
-module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.11.1' = {
+module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.12.0' = {
   name: 'create-log-analytics-workspace'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: logAnalyticsWorkspaceName
     location: location
-    skuName: 'PerGB2018'
     dataRetention: 30
+    skuName: 'PerGB2018'
     tags: tags
   }
   dependsOn: [
@@ -242,12 +447,11 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
   ]
 }
 
-// Module: Create Application Insights
-module createAppInsights 'br/public:avm/res/insights/component:0.6.0' = {
-  name: 'create-app-insights'
+module createApplicationInsights 'br/public:avm/res/insights/component:0.6.0' = {
+  name: 'create-application-insights'
   scope: resourceGroup(resourceGroupName)
   params: {
-    name: appInsightsName
+    name: applicationInsightsName
     location: location
     workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
     tags: tags
@@ -257,38 +461,40 @@ module createAppInsights 'br/public:avm/res/insights/component:0.6.0' = {
   ]
 }
 
-// Module: Create App Service Plan
-module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.4.1' = {
+module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.5.0' = {
   name: 'create-app-service-plan'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: appServicePlanName
     location: location
     kind: 'windows'
-    skuName: 'Y1'
+    skuName: 'B1'
+    skuCapacity: 1
     tags: tags
   }
   dependsOn: [
-    createResourceGroup
+    createApplicationInsights
   ]
 }
 
-// Module: Create Function App
-module createFunctionApp 'br/public:avm/res/web/site:0.15.1' = {
+module createFunctionApp 'br/public:avm/res/web/site:0.19.3' = {
   name: 'create-function-app'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: functionAppName
     location: location
     kind: 'functionapp'
-    clientAffinityEnabled: false
-    storageAccountRequired: true
-    keyVaultAccessIdentityResourceId: createUserManagedIdentity.outputs.resourceId
-    storageAccountResourceId: createStorageAccount.outputs.resourceId
     serverFarmResourceId: createAppServicePlan.outputs.resourceId
-    appInsightResourceId: createAppInsights.outputs.resourceId
+    httpsOnly: true
+    publicNetworkAccess: 'Disabled'
+    outboundVnetRouting: {
+      applicationTraffic: true
+      contentShareTraffic: true
+    }
+    virtualNetworkSubnetResourceId: sharedVirtualNetwork.properties.subnets[2].id
+    keyVaultAccessIdentityResourceId: createUserManagedIdentity.outputs.resourceId
     managedIdentities: {
-      systemAssigned: true // Required for DNS Zone Contributor Role
+      systemAssigned: true
       userAssignedResourceIds: [
         createUserManagedIdentity.outputs.resourceId
       ]
@@ -303,82 +509,173 @@ module createFunctionApp 'br/public:avm/res/web/site:0.15.1' = {
         name: 'scm'
       }
     ]
-    appSettingsKeyValuePairs: acmebotAppSettings
-    siteConfig: {
-      alwaysOn: false
-      ftpsState: 'Disabled'
-      http20Enabled: true
-      netFrameworkVersion: 'v8.0'
-      minTlsVersion: '1.3'
-      cors: {
-        allowedOrigins: [
-          'https://portal.azure.com'
-        ]
+    configs: [
+      {
+        storageAccountResourceId: createStorageAccount.outputs.resourceId
+        name: 'appsettings'
+        properties: {
+          // Function App Values
+          FUNCTIONS_EXTENSION_VERSION: '~4'
+          FUNCTIONS_WORKER_RUNTIME: 'dotnet'
+          FUNCTIONS_INPROC_NET8_ENABLED: '1'
+
+          // Application Insights
+          APPINSIGHTS_INSTRUMENTATIONKEY: createApplicationInsights.outputs.instrumentationKey
+          APPLICATIONINSIGHTS_CONNECTION_STRING: createApplicationInsights.outputs.connectionString
+
+          // Storage
+          AzureWebJobsStorage: '@Microsoft.KeyVault(VaultName=${selectedKeyVaultName};SecretName=connectionString1)'
+          WEBSITE_CONTENTAZUREFILECONNECTIONSTRING: '@Microsoft.KeyVault(VaultName=${selectedKeyVaultName};SecretName=connectionString1)'
+          WEBSITE_CONTENTSHARE: toLower(functionAppName)
+          WEBSITE_RUN_FROM_PACKAGE: acmeKvACMEPackage
+
+          // Enterprise App Values
+          WEBSITE_AUTH_AAD_ALLOWED_TENANTS: tenantId
+          OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: createUserManagedIdentity.outputs.clientId
+          // https://learn.microsoft.com/en-us/azure/app-service/configure-authentication-provider-aad?tabs=workforce-configuration#use-a-managed-identity-instead-of-a-secret-preview
+
+          // Key Vault ACME Values
+          'Acmebot:MitigateChainOrder': 'true'
+          'Acmebot:AzureDns:SubscriptionId': acmeAzurePublicDnsSubscriptionId
+          'Acmebot:AzurePrivateDns:SubscriptionId': acmeAzurePrivateDnsSubscriptionId
+          'Acmebot:Endpoint': acmeEndpoint
+          'Acmebot:Environment': acmeEnvironment
+          'Acmebot:VaultBaseUrl': acmeKeyVaultUrlBase
+          'Acmebot:Contacts': acmeContacts
+        }
       }
-    }
-    authSettingV2Configuration: {
-      identityProviders: {
-        azureActiveDirectory: {
-          enabled: true
-          registration: {
-            clientId: spAppId
-            clientSecretSettingName: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-            openIdIssuer: 'https://sts.windows.net/${tenantId}/v2.0'
+      {
+        name: 'web'
+        properties: {
+          cors: {
+            allowedOrigins: [
+              'https://portal.azure.com'
+            ]
+            supportCredentials: false
           }
         }
       }
-      login: {
-        tokenStore: {
-          enabled: true
+      {
+        name: 'authsettingsV2'
+        properties: {
+          identityProviders: {
+            azureActiveDirectory: {
+              enabled: true
+              registration: {
+                clientId: createAppRegistration.outputs.applicationId
+                openIdIssuer: 'https://sts.windows.net/${tenantId}/v2.0'
+              }
+            }
+          }
+          login: {
+            tokenStore: {
+              enabled: true
+            }
+          }
+          platform: {
+            enabled: true
+            runtimeVersion: '~1'
+          }
+          globalValidation: {
+            requireAuthentication: true
+            redirectToProvider: 'AzureActiveDirectory'
+            unauthenticatedClientAction: 'RedirectToLoginPage'
+          }
         }
       }
-      platform: {
-        enabled: true
-        runtimeVersion: '~1'
-      }
-      globalValidation: {
-        requireAuthentication: true
-        redirectToProvider: 'AzureActiveDirectory'
-        unauthenticatedClientAction: 'RedirectToLoginPage'
-      }
+    ]
+    siteConfig: {
+      http20Enabled: true
+      alwaysOn: true
+      windowsFxVersion: 'dotnet|8.0'
+      netFrameworkVersion: 'v8.0'
+      minTlsVersion: '1.3'
+      scmMinTlsVersion: '1.3'
+      ftpsState: 'Disabled'
     }
-    tags: tags
+    privateEndpoints: [
+      {
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneAzureSites.id
+            }
+          ]
+        }
+        tags: tags
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+      }
+      {
+        privateDnsZoneGroup: {
+          privateDnsZoneGroupConfigs: [
+            {
+              privateDnsZoneResourceId: privDnsZoneAzureSitesSCM.id
+            }
+          ]
+        }
+        tags: tags
+        subnetResourceId: sharedVirtualNetwork.properties.subnets[1].id // snet-private
+      }
+    ]
   }
   dependsOn: [
-    createAppServicePlan
     createStorageAccount
-    createAppInsights
-    createKeyVault
+    createApplicationInsights
+    createAppServicePlan
   ]
 }
 
-module createRoleAssignmentDnsZoneContributor 'modules/role-assignment/subscription/main.bicep' = {
-  name: 'create-role-assignment-dns-zone-contributor'
-  scope: subscription()
+module updateKeyVaultFunctionAppRbac 'br/public:avm/res/key-vault/vault/access-policy:0.1.0' = {
+  scope: resourceGroup(createWithKeyVault ? resourceGroupName : existingKeyVaultResourceGroup)
   params: {
-    principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId
-    roleDefinitionIdOrName: '/providers/Microsoft.Authorization/roleDefinitions/befefa01-2a29-4197-83a8-272ff33ce314' // DNS Zone Contributor
-    principalType: 'ServicePrincipal'
-    subscriptionId: subscriptionId
+    keyVaultName: selectedKeyVaultName
+    accessPolicies: [
+      {
+        objectId: createFunctionApp.outputs.systemAssignedMIPrincipalId!
+        permissions: {
+          certificates: [
+            'get'
+            'list'
+            'update'
+            'create'
+            'delete'
+          ]
+        }
+      }
+    ]
   }
   dependsOn: [
     createFunctionApp
   ]
 }
 
-module createRoleAssignmentPrivateDnsZoneContributor 'modules/role-assignment/subscription/main.bicep' = {
-  name: 'create-role-assignment-private-dns-zone-contributor'
-  scope: subscription()
-  params: {
-    principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId
-    roleDefinitionIdOrName: '/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f' // Private DNS Zone Contributor
-    principalType: 'ServicePrincipal'
-    subscriptionId: subscriptionId
-  }
-  dependsOn: [
-    createFunctionApp
-  ]
-}
 
-output systemAssignedIdentityId string = createFunctionApp.outputs.systemAssignedMIPrincipalId
-output keyVaultName string = createKeyVault.outputs.name
+module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
+  for dnsZoneResourceId in azurePublicDnsZones: if (enablePublicDnsRoleAssignment) {
+    name: 'rbac-${uniqueString(dnsZoneResourceId)}'
+    scope: resourceGroup(azurePublicDnsResourceGroup)
+    params: {
+      principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId!
+      roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/befefa01-2a29-4197-83a8-272ff33ce314' // DNS Zone Contributor
+      resourceId: dnsZoneResourceId
+    }
+    dependsOn: [
+      createFunctionApp
+    ]
+  }
+]
+
+module roleAssignmentPrivateDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
+  for dnsZoneResourceId in azurePrivateDnsZones: if (enablePrivateDnsRoleAssignment) {
+    name: 'rbac-${uniqueString(dnsZoneResourceId)}'
+    scope: resourceGroup(azurePrivateDnsResourceGroup)
+    params: {
+      principalId: createFunctionApp.outputs.systemAssignedMIPrincipalId!
+      roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f' // Private DNS Zone Contributor
+      resourceId: dnsZoneResourceId
+    }
+    dependsOn: [
+      createFunctionApp
+    ]
+  }
+]

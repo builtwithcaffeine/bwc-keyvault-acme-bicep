@@ -1,0 +1,49 @@
+{
+  "version": "1.0.0",
+  "name": "Microsoft Graph Groups Module",
+  "description": "Bicep module for creating and configuring Azure AD groups",
+  "author": "Platform Team",
+  "apiVersion": "v1.0",
+  "provider": "Microsoft.Graph",
+  "resourceType": "groups",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for security groups",
+        "Support for Microsoft 365 groups",
+        "Support for role-assignable groups",
+        "Support for dynamic membership",
+        "Comprehensive parameter validation",
+        "Owner and member management",
+        "Complete documentation and examples"
+      ]
+    }
+  ],
+  "features": [
+    "Security group configurations",
+    "Microsoft 365 group configurations",
+    "Role-assignable group support",
+    "Dynamic membership rules",
+    "Group visibility settings",
+    "Owner and member management",
+    "Group classification and themes",
+    "Comprehensive validation"
+  ],
+  "requirements": {
+    "bicep": ">=0.20.0",
+    "provider": "Microsoft.Graph",
+    "permissions": [
+      "Group.ReadWrite.All"
+    ]
+  },
+  "examples": {
+    "basic": "./README.md#basic-security-group",
+    "m365": "./README.md#microsoft-365-group",
+    "role": "./README.md#role-assignable-group",
+    "dynamic": "./README.md#dynamic-security-group",
+    "test": "./test/main.test.bicep"
+  }
+}

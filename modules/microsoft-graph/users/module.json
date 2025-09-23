@@ -1,0 +1,42 @@
+{
+  "version": "1.0.0",
+  "name": "Microsoft Graph Users Module",
+  "description": "Bicep module for referencing existing Azure AD users",
+  "author": "Platform Team",
+  "apiVersion": "v1.0",
+  "provider": "Microsoft.Graph",
+  "resourceType": "users",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for existing user references",
+        "Comprehensive user information outputs",
+        "Integration with other Microsoft Graph modules",
+        "Complete documentation and examples"
+      ]
+    }
+  ],
+  "features": [
+    "Existing user reference",
+    "User information retrieval",
+    "Integration with other modules",
+    "Simple parameter interface",
+    "Comprehensive outputs"
+  ],
+  "requirements": {
+    "bicep": ">=0.20.0",
+    "provider": "Microsoft.Graph",
+    "permissions": [
+      "User.Read.All"
+    ]
+  },
+  "examples": {
+    "basic": "./README.md#basic-user-reference",
+    "multiple": "./README.md#multiple-user-references",
+    "owner": "./README.md#user-as-application-owner",
+    "test": "./test/main.test.bicep"
+  }
+}

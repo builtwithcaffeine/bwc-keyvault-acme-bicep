@@ -1,0 +1,278 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "displayName": {
+      "value": "Contoso Enterprise Application"
+    },
+    "appName": {
+      "value": "contoso-enterprise-app"
+    },
+    "appDescription": {
+      "value": "Enterprise application demonstrating comprehensive Microsoft Graph application configuration with security best practices"
+    },
+    "signInAudience": {
+      "value": "AzureADMyOrg"
+    },
+    "webRedirectUris": {
+      "value": [
+        "https://contoso-app.azurewebsites.net/signin-oidc",
+        "https://contoso-app.azurewebsites.net/auth/callback",
+        "https://contoso-app-staging.azurewebsites.net/signin-oidc",
+        "https://localhost:5001/signin-oidc",
+        "https://localhost:7001/signin-oidc"
+      ]
+    },
+    "homePageUrl": {
+      "value": "https://contoso-app.azurewebsites.net"
+    },
+    "logoutUrl": {
+      "value": "https://contoso-app.azurewebsites.net/signout-oidc"
+    },
+    "spaRedirectUris": {
+      "value": [
+        "https://contoso-spa.azurewebsites.net/auth/callback",
+        "https://contoso-spa.azurewebsites.net/silent-renew",
+        "https://contoso-spa-staging.azurewebsites.net/auth/callback",
+        "http://localhost:3000/auth/callback",
+        "http://localhost:4200/auth/callback",
+        "http://localhost:8080/auth/callback"
+      ]
+    },
+    "publicClientRedirectUris": {
+      "value": [
+        "msauth.com.contoso.enterpriseapp://auth",
+        "msauth://com.contoso.enterpriseapp/AbCdEfGhIjK",
+        "ms-app://s-1-15-2-1234567890-1234567890-1234567890-1234567890-1234567890-1234567890-1234567890/",
+        "https://login.microsoftonline.com/common/oauth2/nativeclient",
+        "http://localhost:8080"
+      ]
+    },
+    "isFallbackPublicClient": {
+      "value": true
+    },
+    "isDeviceOnlyAuthSupported": {
+      "value": false
+    },
+    "identifierUris": {
+      "value": [
+        "api://contoso-enterprise-app"
+      ]
+    },
+    "oauth2PermissionScopes": {
+      "value": [
+        {
+          "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "adminConsentDescription": "Allows the application to read user profile data on behalf of the signed-in user",
+          "adminConsentDisplayName": "Read user profiles",
+          "userConsentDescription": "Allows the app to read your profile information",
+          "userConsentDisplayName": "Read your profile",
+          "value": "User.Read",
+          "type": "User",
+          "isEnabled": true
+        },
+        {
+          "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+          "adminConsentDescription": "Allows the application to access company directory data",
+          "adminConsentDisplayName": "Access directory data",
+          "userConsentDescription": "Allows the app to access company directory information on your behalf",
+          "userConsentDisplayName": "Access directory data",
+          "value": "Directory.Access",
+          "type": "Admin",
+          "isEnabled": true
+        }
+      ]
+    },
+    "appRoles": {
+      "value": [
+        {
+          "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+          "displayName": "Administrator",
+          "description": "Full administrative access to the application",
+          "value": "App.Admin",
+          "allowedMemberTypes": ["User"],
+          "isEnabled": true
+        },
+        {
+          "id": "d4e5f6a7-b8c9-0123-defa-456789012345",
+          "displayName": "User",
+          "description": "Standard user access to the application",
+          "value": "App.User",
+          "allowedMemberTypes": ["User", "Application"],
+          "isEnabled": true
+        },
+        {
+          "id": "e5f6a7b8-c9d0-1234-efab-567890123456",
+          "displayName": "Reader",
+          "description": "Read-only access to application data",
+          "value": "App.Reader",
+          "allowedMemberTypes": ["User", "Application"],
+          "isEnabled": true
+        }
+      ]
+    },
+    "enableIdTokenIssuance": {
+      "value": true
+    },
+    "enableAccessTokenIssuance": {
+      "value": false
+    },
+    "requestedAccessTokenVersion": {
+      "value": 2
+    },
+    "groupMembershipClaims": {
+      "value": "SecurityGroup"
+    },
+    "acceptMappedClaims": {
+      "value": false
+    },
+    "requiredResourceAccess": {
+      "value": [
+        {
+          "resourceAppId": "00000003-0000-0000-c000-000000000000",
+          "resourceAccess": [
+            {
+              "id": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+              "type": "Scope"
+            },
+            {
+              "id": "37f7f235-527c-4136-accd-4a02d197296e",
+              "type": "Scope"
+            },
+            {
+              "id": "7427e0e9-2fba-42fe-b0c0-848c9e6a8182",
+              "type": "Scope"
+            },
+            {
+              "id": "62a82d76-70ea-41e2-9197-370581804d09",
+              "type": "Scope"
+            },
+            {
+              "id": "5b567255-7703-4780-807c-7be8301ae99b",
+              "type": "Role"
+            },
+            {
+              "id": "df021288-bdef-4463-88db-98f22de89214",
+              "type": "Role"
+            }
+          ]
+        },
+        {
+          "resourceAppId": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+          "resourceAccess": [
+            {
+              "id": "41094075-9dad-400e-a0bd-54e686782033",
+              "type": "Scope"
+            }
+          ]
+        }
+      ]
+    },
+    "preAuthorizedApplications": {
+      "value": [
+        {
+          "appId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "delegatedPermissionIds": [
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          ]
+        }
+      ]
+    },
+    "optionalClaims": {
+      "value": {
+        "accessToken": [
+          {
+            "name": "groups",
+            "essential": false
+          },
+          {
+            "name": "preferred_username",
+            "essential": false
+          },
+          {
+            "name": "email",
+            "essential": false
+          }
+        ],
+        "idToken": [
+          {
+            "name": "groups",
+            "essential": false
+          },
+          {
+            "name": "email",
+            "essential": false
+          },
+          {
+            "name": "family_name",
+            "essential": false
+          },
+          {
+            "name": "given_name",
+            "essential": false
+          }
+        ],
+        "saml2Token": [
+          {
+            "name": "groups",
+            "essential": false
+          }
+        ]
+      }
+    },
+    "applicationInfo": {
+      "value": {
+        "marketingUrl": "https://contoso.com/products/enterprise-app",
+        "privacyStatementUrl": "https://contoso.com/privacy",
+        "supportUrl": "https://support.contoso.com/enterprise-app",
+        "termsOfServiceUrl": "https://contoso.com/terms-of-service"
+      }
+    },
+    "authenticationBehaviors": {
+      "value": {
+        "removeUnverifiedEmailClaim": true,
+        "requireClientServicePrincipal": true
+      }
+    },
+    "parentalControlSettings": {
+      "value": {
+        "countriesBlockedForMinors": ["US", "CA"],
+        "legalAgeGroupRule": "RequireConsentForPrivacyServices"
+      }
+    },
+    "tags": {
+      "value": [
+        "environment:production",
+        "team:platform",
+        "cost-center:engineering",
+        "compliance:sox",
+        "security-review:approved",
+        "deployment-method:bicep"
+      ]
+    },
+    "notes": {
+      "value": "Enterprise application with comprehensive security configuration. Supports web, SPA, and mobile platforms. Includes custom API scopes and application roles for fine-grained access control."
+    },
+    "serviceManagementReference": {
+      "value": "SNOW-REQ-12345"
+    },
+    "nativeAuthenticationApisEnabled": {
+      "value": "none"
+    },
+    "servicePrincipalLockConfiguration": {
+      "value": {
+        "isEnabled": true,
+        "allProperties": false,
+        "credentialsWithUsageVerify": false,
+        "credentialsWithUsageSign": false,
+        "tokenEncryptionKeyId": false
+      }
+    },
+    "samlMetadataUrl": {
+      "value": ""
+    },
+    "tokenEncryptionKeyId": {
+      "value": ""
+    }
+  }
+}
