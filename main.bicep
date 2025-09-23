@@ -50,6 +50,10 @@ param sharedResourceGroupName string
 @description('Shared Virtual Network Name')
 param sharedVirtualNetworkName string
 
+// App Service Plan
+param appServiceKind string = 'linux'
+param appServiceSkuName string = 'B1'
+
 //
 // Azure Key Vault
 @description('Create Key Vault Resource')
@@ -127,6 +131,16 @@ param acmeContacts string
 @description('Key Vault Name Variable')
 var selectedKeyVaultName = createWithKeyVault ? keyvaultName : existingKeyVaultName
 
+var privateDnsZonesArray = [
+  'privatelink.vaultcore.azure.net'
+  'privatelink.blob.${environment().suffixes.storage}'
+  'privatelink.table.${environment().suffixes.storage}'
+  'privatelink.file.${environment().suffixes.storage}'
+  'privatelink.queue.${environment().suffixes.storage}'
+  'privatelink.azurewebsites.net'
+  'scm.privatelink.azurewebsites.net'
+]
+
 //
 // Azure Resource - [Existing]
 resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2024-07-01' existing = {
@@ -142,43 +156,43 @@ resource existingKeyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = if (
 // Private End Point - Key Vault
 resource privDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.vaultcore.azure.net'
+  name: privateDnsZonesArray[0]
 }
 
 // Private End Point - Storage Account (Blob)
 resource privDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.blob.${environment().suffixes.storage}'
+  name: privateDnsZonesArray[1]
 }
 
 // Private End Point - Storage Account (Table)
 resource privDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.table.${environment().suffixes.storage}'
+  name: privateDnsZonesArray[2]
 }
 
 // Private End Point - Storage Account (File)
 resource privDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.file.${environment().suffixes.storage}'
+  name: privateDnsZonesArray[3]
 }
 
 // Private End Point - Storage Account (Queue)
 resource privDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.queue.${environment().suffixes.storage}'
+  name: privateDnsZonesArray[4]
 }
 
 // Private End Point - Web Site
 resource privDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'privatelink.azurewebsites.net'
+  name: privateDnsZonesArray[5]
 }
 
 // Private End Point - Web Site SCM
 resource privDnsZoneAzureSitesSCM 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
-  name: 'scm.privatelink.azurewebsites.net'
+  name: privateDnsZonesArray[6]
 }
 
 //
@@ -467,8 +481,8 @@ module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.5.0' = {
   params: {
     name: appServicePlanName
     location: location
-    kind: 'windows'
-    skuName: 'B1'
+    kind: appServiceKind
+    skuName: appServiceSkuName
     skuCapacity: 1
     tags: tags
   }
@@ -516,9 +530,11 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.3' = {
         properties: {
           // Function App Values
           FUNCTIONS_EXTENSION_VERSION: '~4'
-          FUNCTIONS_WORKER_RUNTIME: 'dotnet'
-          FUNCTIONS_INPROC_NET8_ENABLED: '1'
-
+          FUNCTIONS_WORKER_RUNTIME: 'dotnet-isolated'
+          
+          // Ensure compatibility with pre-built packages
+          WEBSITE_USE_PLACEHOLDER: '0'
+          
           // Application Insights
           APPINSIGHTS_INSTRUMENTATIONKEY: createApplicationInsights.outputs.instrumentationKey
           APPLICATIONINSIGHTS_CONNECTION_STRING: createApplicationInsights.outputs.connectionString
@@ -535,13 +551,13 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.3' = {
           // https://learn.microsoft.com/en-us/azure/app-service/configure-authentication-provider-aad?tabs=workforce-configuration#use-a-managed-identity-instead-of-a-secret-preview
 
           // Key Vault ACME Values
-          'Acmebot:MitigateChainOrder': 'true'
-          'Acmebot:AzureDns:SubscriptionId': acmeAzurePublicDnsSubscriptionId
-          'Acmebot:AzurePrivateDns:SubscriptionId': acmeAzurePrivateDnsSubscriptionId
-          'Acmebot:Endpoint': acmeEndpoint
-          'Acmebot:Environment': acmeEnvironment
-          'Acmebot:VaultBaseUrl': acmeKeyVaultUrlBase
-          'Acmebot:Contacts': acmeContacts
+          'Acmebot__MitigateChainOrder': 'true'
+          'Acmebot__AzureDns__SubscriptionId': acmeAzurePublicDnsSubscriptionId
+          'Acmebot__AzurePrivateDns__SubscriptionId': acmeAzurePrivateDnsSubscriptionId
+          'Acmebot__Endpoint': acmeEndpoint
+          'Acmebot__Environment': acmeEnvironment
+          'Acmebot__VaultBaseUrl': acmeKeyVaultUrlBase
+          'Acmebot__Contacts': acmeContacts
         }
       }
       {
@@ -587,8 +603,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.3' = {
     siteConfig: {
       http20Enabled: true
       alwaysOn: true
-      windowsFxVersion: 'dotnet|8.0'
-      netFrameworkVersion: 'v8.0'
+      linuxFxVersion: 'DOTNET|8.0'
       minTlsVersion: '1.3'
       scmMinTlsVersion: '1.3'
       ftpsState: 'Disabled'
