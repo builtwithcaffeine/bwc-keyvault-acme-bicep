@@ -19,11 +19,13 @@ param existingKeyVaultResourceGroup = ''
 param existingKeyVaultName = ''
 
 // Azure Network
+param enableCreatePrivateDnsZones = false
 param enableCreateVirtualNetwork = true
 param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param virtualNetworkAddressPrefix = '10.0.0.0/24'
-param virtualNetworkSubnetShared = '10.0.0.0/28'
-param virtualNetworkSubnetAppService = '10.0.0.16/28'
+param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
+param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
+param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
+
 //
 // Azure DNS Zones
 param enablePublicDnsRoleAssignment = true

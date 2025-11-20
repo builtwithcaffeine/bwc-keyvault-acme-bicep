@@ -60,6 +60,17 @@ param appRegistrationName string = 'sp-kvacme-authentication-${environmentType}'
 // Parameters [Existing Resources]
 // Imported from parameters file or passed in at deployment time
 
+@description('Shared Hub - Resource Group Name')
+param sharedResourceGroupName string
+
+@description('Shared Virtual Network Name')
+param sharedVirtualNetworkName string
+
+// Azure Virtual Network
+
+@description('Enable Create Private Dns Zones')
+param enableCreatePrivateDnsZones bool
+
 @description('Enable Create Virtual Network Module')
 param enableCreateVirtualNetwork bool
 
@@ -75,14 +86,6 @@ param virtualNetworkSubnetShared string
 @description('Virtual Network Subnet - App Service')
 param virtualNetworkSubnetAppService string
 
-@description('Shared Hub - Resource Group Name')
-param sharedResourceGroupName string
-
-@description('Shared Virtual Network Name')
-param sharedVirtualNetworkName string
-
-//
-// Entra Id
 
 // App Service Plan
 
@@ -94,7 +97,6 @@ param appServiceKind string = 'windows'
 @allowed(['B1','B2'])
 param appServiceSkuName string = 'B1'
 
-//
 // Azure Key Vault
 @description('Create Key Vault Resource')
 param createWithKeyVault bool
@@ -249,6 +251,21 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.2' = 
   }
 }
 
+module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
+  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
+    name: 'create-private-dns-zone-${replace(privateDnsZone, '.', '-')}'
+    scope: resourceGroup(resourceGroupName)
+    params: {
+      name: privateDnsZone
+      location: 'global'
+      tags: tags
+    }
+    dependsOn: [
+      createResourceGroup
+    ]
+  }
+]
+
 module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network'
   scope: resourceGroup(resourceGroupName)
@@ -278,7 +295,7 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = 
 
 module linkPrivateDnsZones 'br/public:avm/ptn/network/private-link-private-dns-zones:0.7.0' = if (enableCreateVirtualNetwork) {
   name: 'link-private-dns-zones'
-  scope: resourceGroup(sharedResourceGroupName)
+  scope: resourceGroup(enableCreateVirtualNetwork ? resourceGroupName : sharedResourceGroupName)
   params: {
     privateLinkPrivateDnsZones: privateDnsZonesArray
     virtualNetworkLinks: [
