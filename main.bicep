@@ -623,7 +623,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
         properties: {
           // Function App Values
           FUNCTIONS_EXTENSION_VERSION: '~4'
-          FUNCTIONS_WORKER_RUNTIME: 'dotnet-isolated'
+          FUNCTIONS_WORKER_RUNTIME: 'dotnet'
           FUNCTIONS_INPROC_NET8_ENABLED: '1'
 
           // Application Insights
