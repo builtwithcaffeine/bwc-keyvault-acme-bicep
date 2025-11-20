@@ -10,7 +10,7 @@ param deployedBy = ''
 //
 // Azure Existing Resource
 param sharedResourceGroupName = 'rg-builtwithcaffeine-hub-weu'
-param sharedVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
+
 
 //
 // Azure Key Vault
@@ -20,12 +20,19 @@ param existingKeyVaultName = ''
 
 // Azure Network
 param enableCreatePrivateDnsZones = false
+
+// Azure Network - New Virtual Network
 param enableCreateVirtualNetwork = true
 param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
 param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
 param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
 
+// Azure Network - Exsisting Virtual Network
+param existingVirtualNetworkResourceGroup = 'rg-builtwithcaffeine-hub-weu'
+param existingVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
+param existingVirtualNetworkSubnetSharedName = 'snet-shared-hub-prod-weu'
+param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice-hub-prod-weu'
 //
 // Azure DNS Zones
 param enablePublicDnsRoleAssignment = true

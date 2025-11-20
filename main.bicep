@@ -63,9 +63,6 @@ param appRegistrationName string = 'sp-kvacme-authentication-${environmentType}'
 @description('Shared Hub - Resource Group Name')
 param sharedResourceGroupName string
 
-@description('Shared Virtual Network Name')
-param sharedVirtualNetworkName string
-
 // Azure Virtual Network
 
 @description('Enable Create Private Dns Zones')
@@ -86,6 +83,19 @@ param virtualNetworkSubnetShared string
 @description('Virtual Network Subnet - App Service')
 param virtualNetworkSubnetAppService string
 
+//
+
+@description('Existing Virtual Network Resource Group Name')
+param existingVirtualNetworkResourceGroup string
+
+@description('Existing Virtual Network Name')
+param existingVirtualNetworkName string
+
+@description('Existing Virtual Network Subnet - Shared Resources')
+param existingVirtualNetworkSubnetSharedName string
+
+@description('Existing Virtual Network Subnet - App Service')
+param existingVirtualNetworkSubnetAppServiceName string
 
 // App Service Plan
 
@@ -167,12 +177,14 @@ param acmeEnvironment string
 param acmeKeyVaultUrlBase string
 
 @description('Key Vault ACME - Email Contact(s)')
+@secure()
 param acmeContacts string
 
 //
 @description('Key Vault Name Variable')
 var selectedKeyVaultName = createWithKeyVault ? keyvaultName : existingKeyVaultName
 
+@description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
   'privatelink.vaultcore.azure.net'
   'privatelink.blob.${environment().suffixes.storage}'
@@ -185,12 +197,22 @@ var privateDnsZonesArray = [
 
 //
 // Azure Resource - [Existing]
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2024-07-01' existing = if (!enableCreateVirtualNetwork) {
-  scope: resourceGroup(sharedResourceGroupName)
-  name: sharedVirtualNetworkName
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+  scope: resourceGroup(existingVirtualNetworkResourceGroup)
+  name: existingVirtualNetworkName
 }
 
-resource existingKeyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = if (!createWithKeyVault) {
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+  parent: sharedVirtualNetwork
+  name: existingVirtualNetworkSubnetSharedName
+}
+
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+  parent: sharedVirtualNetwork
+  name: existingVirtualNetworkSubnetAppServiceName
+}
+
+resource existingKeyVault 'Microsoft.KeyVault/vaults@2025-05-01' existing = if (!createWithKeyVault) {
   scope: resourceGroup(existingKeyVaultResourceGroup)
   name: existingKeyVaultName
 }
@@ -281,7 +303,7 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = 
         addressPrefix: virtualNetworkSubnetShared
       }
       {
-        name: 'snet-kvamce-appservice'
+        name: 'snet-kvacme-appservice'
         addressPrefix: virtualNetworkSubnetAppService
         delegation: 'Microsoft.Web/serverFarms'
       }
@@ -436,7 +458,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = if (createWit
         service: 'vault'
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
@@ -498,7 +520,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         service: 'blob'
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
@@ -511,7 +533,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         service: 'file'
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
@@ -524,7 +546,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         service: 'table'
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
@@ -537,7 +559,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         service: 'queue'
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
@@ -615,7 +637,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
     }
     virtualNetworkSubnetResourceId: enableCreateVirtualNetwork
       ? createVirtualNetwork.outputs.subnetResourceIds[1]
-      : sharedVirtualNetwork.properties.subnets[2].id
+      : existingVirtualNetworkSubnetAppService.id
     keyVaultAccessIdentityResourceId: createUserManagedIdentity.outputs.resourceId
     managedIdentities: {
       systemAssigned: true
@@ -728,7 +750,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
         tags: tags
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
       }
       {
         privateDnsZoneGroup: {
@@ -741,9 +763,10 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
         tags: tags
         subnetResourceId: enableCreateVirtualNetwork
           ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : sharedVirtualNetwork.properties.subnets[1].id
+          : existingVirtualNetworkSubnetShared.id
       }
     ]
+    tags: tags
   }
   dependsOn: [
     createStorageAccount
