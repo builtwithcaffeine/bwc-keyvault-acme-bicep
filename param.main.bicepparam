@@ -11,7 +11,6 @@ param deployedBy = ''
 // Azure Existing Resource
 param sharedResourceGroupName = 'rg-builtwithcaffeine-hub-weu'
 
-
 //
 // Azure Key Vault
 param createWithKeyVault = true
