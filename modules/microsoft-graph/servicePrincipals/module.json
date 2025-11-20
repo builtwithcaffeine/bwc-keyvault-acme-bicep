@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "name": "Microsoft Graph Service Principals Module",
+  "description": "Bicep module for creating and configuring Azure AD service principals",
+  "author": "Platform Team",
+  "apiVersion": "v1.0",
+  "provider": "Microsoft.Graph",
+  "resourceType": "servicePrincipals",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for basic service principal creation",
+        "Support for SSO configurations",
+        "Support for role assignment requirements",
+        "App roles and permission scope management",
+        "Credential configuration support",
+        "Owner management",
+        "Complete documentation and examples"
+      ]
+    }
+  ],
+  "features": [
+    "Service principal creation and configuration",
+    "Single sign-on (SSO) mode settings",
+    "App role assignment requirements",
+    "URL configurations (login, logout, reply)",
+    "Tag and metadata management",
+    "Credential management support",
+    "Owner assignment",
+    "Comprehensive validation"
+  ],
+  "requirements": {
+    "bicep": ">=0.20.0",
+    "provider": "Microsoft.Graph",
+    "permissions": [
+      "Application.ReadWrite.All"
+    ]
+  },
+  "examples": {
+    "basic": "./README.md#basic-service-principal",
+    "sso": "./README.md#service-principal-with-sso-configuration",
+    "restricted": "./README.md#service-principal-with-role-assignment-required",
+    "test": "./test/main.test.bicep"
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "5940085041880125161"
+    },
+    "name": "Microsoft Graph Users",
+    "description": "References existing Azure AD users for use in other resources",
+    "owner": "Platform Team"
+  },
+  "parameters": {
+    "userPrincipalName": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. User principal name of the existing user"
+      }
+    }
+  },
+  "imports": {
+    "microsoftGraphV1": {
+      "provider": "MicrosoftGraph",
+      "version": "1.0.0"
+    }
+  },
+  "resources": {
+    "user": {
+      "existing": true,
+      "import": "microsoftGraphV1",
+      "type": "Microsoft.Graph/users@v1.0",
+      "properties": {
+        "userPrincipalName": "[parameters('userPrincipalName')]"
+      },
+      "metadata": {
+        "description": "Microsoft Graph User Reference"
+      }
+    }
+  },
+  "outputs": {
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource ID of the user"
+      },
+      "value": "[reference('user').id]"
+    },
+    "userId": {
+      "type": "string",
+      "metadata": {
+        "description": "The user ID (object ID)"
+      },
+      "value": "[reference('user').id]"
+    },
+    "userPrincipalName": {
+      "type": "string",
+      "metadata": {
+        "description": "The user principal name"
+      },
+      "value": "[reference('user').userPrincipalName]"
+    },
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "The display name of the user"
+      },
+      "value": "[reference('user').displayName]"
+    },
+    "mail": {
+      "type": "string",
+      "metadata": {
+        "description": "The mail address of the user"
+      },
+      "value": "[reference('user').mail]"
+    },
+    "givenName": {
+      "type": "string",
+      "metadata": {
+        "description": "The given name of the user"
+      },
+      "value": "[reference('user').givenName]"
+    },
+    "surname": {
+      "type": "string",
+      "metadata": {
+        "description": "The surname of the user"
+      },
+      "value": "[reference('user').surname]"
+    }
+  }
+}

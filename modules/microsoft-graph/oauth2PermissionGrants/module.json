@@ -1,0 +1,51 @@
+{
+  "version": "1.0.0",
+  "name": "Microsoft Graph OAuth2 Permission Grants Module",
+  "description": "Bicep module for creating and configuring OAuth2 permission grants for service principals",
+  "author": "Platform Team",
+  "apiVersion": "v1.0",
+  "provider": "Microsoft.Graph",
+  "resourceType": "oauth2PermissionGrants",
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for OAuth2 permission grant creation",
+        "Support for AllPrincipals and Principal consent types",
+        "Scope-based permission management",
+        "Client and resource service principal configuration"
+      ]
+    }
+  ],
+  "parameters": {
+    "required": [
+      "clientId",
+      "consentType",
+      "resourceId"
+    ],
+    "optional": [
+      "principalId",
+      "scope"
+    ]
+  },
+  "outputs": [
+    "resourceId",
+    "oauth2PermissionGrantId",
+    "clientId",
+    "consentType",
+    "principalId",
+    "resourceServicePrincipalId",
+    "scope"
+  ],
+  "dependencies": [],
+  "tags": [
+    "microsoft-graph",
+    "oauth2",
+    "permissions",
+    "grants",
+    "service-principals",
+    "authorization"
+  ]
+}

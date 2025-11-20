@@ -1,0 +1,149 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "_comment_basic_example": {
+      "value": "=== GITHUB ACTIONS - MAIN BRANCH DEPLOYMENT ==="
+    },
+    "applicationId": {
+      "value": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app"
+    },
+    "name": {
+      "value": "github-main-branch"
+    },
+    "issuer": {
+      "value": "https://token.actions.githubusercontent.com"
+    },
+    "subject": {
+      "value": "repo:myorganization/myrepository:ref:refs/heads/main"
+    },
+    "audiences": {
+      "value": [
+        "api://AzureADTokenExchange"
+      ]
+    },
+    "credentialDescription": {
+      "value": "GitHub Actions authentication for main branch deployments to production"
+    },
+    
+    "_comment_examples": {
+      "value": "=== ADDITIONAL EXAMPLES (uncomment to use) ==="
+    },
+    
+    "_example_github_environment": {
+      "value": {
+        "description": "GitHub Actions - Environment specific deployment",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "github-production-environment",
+        "issuer": "https://token.actions.githubusercontent.com",
+        "subject": "repo:myorganization/myrepository:environment:production",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "GitHub Actions authentication for production environment with enhanced protection"
+      }
+    },
+    
+    "_example_github_pull_request": {
+      "value": {
+        "description": "GitHub Actions - Pull request validation",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "github-pull-request",
+        "issuer": "https://token.actions.githubusercontent.com",
+        "subject": "repo:myorganization/myrepository:pull_request",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "GitHub Actions authentication for pull request validation and testing"
+      }
+    },
+    
+    "_example_azure_devops": {
+      "value": {
+        "description": "Azure DevOps - Service connection",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "azdo-production-deployment",
+        "issuer": "https://vstoken.dev.azure.com/myorganization",
+        "subject": "sc://myorganization/myproject/production-serviceconnection",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "Azure DevOps service connection for production deployments"
+      }
+    },
+    
+    "_example_aks_workload": {
+      "value": {
+        "description": "AKS Workload Identity - Kubernetes service account",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "aks-production-workload",
+        "issuer": "https://oidc.prod-aks.azure.com/12345678-1234-1234-1234-123456789012",
+        "subject": "system:serviceaccount:production:backend-service",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "AKS workload identity for backend service in production namespace"
+      }
+    },
+    
+    "_example_aws_federation": {
+      "value": {
+        "description": "AWS Cross-cloud federation",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "aws-github-federation",
+        "issuer": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com",
+        "subject": "repo:myorganization/aws-integration:ref:refs/heads/main",
+        "audiences": ["sts.amazonaws.com", "api://AzureADTokenExchange"],
+        "credentialDescription": "Cross-cloud federation between Azure and AWS via GitHub Actions"
+      }
+    },
+    
+    "_example_gitlab": {
+      "value": {
+        "description": "GitLab CI/CD - Branch deployment",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "gitlab-main-branch",
+        "issuer": "https://gitlab.com",
+        "subject": "project_path:mygroup/myproject:ref_type:branch:ref:main",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "GitLab CI/CD authentication for main branch deployments"
+      }
+    },
+    
+    "_example_tag_releases": {
+      "value": {
+        "description": "GitHub Actions - Tag-based releases",
+        "applicationId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Graph/applications/my-app",
+        "name": "github-tag-releases",
+        "issuer": "https://token.actions.githubusercontent.com",
+        "subject": "repo:myorganization/myrepository:ref:refs/tags/v*",
+        "audiences": ["api://AzureADTokenExchange"],
+        "credentialDescription": "GitHub Actions authentication for version tag-based release deployments"
+      }
+    },
+    
+    "_usage_notes": {
+      "value": {
+        "purpose": "Creates federated identity credentials for passwordless OIDC authentication",
+        "requirements": {
+          "applicationId": "Must reference an existing Azure AD application resource ID",
+          "credentialName": "Must be unique within the application",
+          "issuer": "OIDC issuer URL from external identity provider",
+          "subject": "Subject claim pattern that must match incoming tokens",
+          "audiences": "List of valid audiences for token validation"
+        },
+        "security_patterns": {
+          "branch_specific": "Use specific branch references for production",
+          "environment_gates": "Implement environment-specific subjects for enhanced security",
+          "pull_request_isolation": "Separate credentials for PR validation workflows",
+          "tag_based_releases": "Use tag patterns for versioned deployments"
+        },
+        "common_issuers": {
+          "github_actions": "https://token.actions.githubusercontent.com",
+          "azure_devops": "https://vstoken.dev.azure.com/{organization}",
+          "gitlab": "https://gitlab.com",
+          "aks_workload": "https://oidc.prod-aks.azure.com/{tenant-id}",
+          "aws_iam": "arn:aws:iam::{account}:oidc-provider/token.actions.githubusercontent.com"
+        },
+        "troubleshooting": {
+          "authentication_failures": "Verify subject claim matches exactly (case-sensitive)",
+          "audience_errors": "Ensure audiences include required values like 'api://AzureADTokenExchange'",
+          "issuer_issues": "Check issuer URL accessibility and correctness",
+          "name_conflicts": "Confirm credential name is unique within the application"
+        }
+      }
+    }
+  }
+}

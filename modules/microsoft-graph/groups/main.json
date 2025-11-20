@@ -1,0 +1,240 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "8001036674312154182"
+    },
+    "name": "Microsoft Graph Groups",
+    "description": "Creates and configures Azure AD groups",
+    "owner": "Platform Team"
+  },
+  "parameters": {
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Display name for the group"
+      }
+    },
+    "groupDescription": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Description of the group"
+      }
+    },
+    "mailNickname": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Mail nickname for the group"
+      }
+    },
+    "mailEnabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether the group is mail-enabled"
+      }
+    },
+    "securityEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Optional. Whether the group is security-enabled"
+      }
+    },
+    "groupTypes": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Group types (e.g., Unified for Microsoft 365 groups)"
+      }
+    },
+    "isAssignableToRole": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether the group can be assigned to roles"
+      }
+    },
+    "visibility": {
+      "type": "string",
+      "defaultValue": "Private",
+      "allowedValues": [
+        "Private",
+        "Public",
+        "HiddenMembership"
+      ],
+      "metadata": {
+        "description": "Optional. Group visibility"
+      }
+    },
+    "classification": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Group classification"
+      }
+    },
+    "preferredLanguage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Preferred language for the group"
+      }
+    },
+    "preferredDataLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Preferred data location for the group"
+      }
+    },
+    "theme": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Group theme"
+      }
+    },
+    "membershipRule": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Membership rule for dynamic groups"
+      }
+    },
+    "membershipRuleProcessingState": {
+      "type": "string",
+      "defaultValue": "On",
+      "allowedValues": [
+        "On",
+        "Paused"
+      ],
+      "metadata": {
+        "description": "Optional. Membership rule processing state for dynamic groups"
+      }
+    },
+    "isManagementRestricted": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether management is restricted"
+      }
+    },
+    "ownerIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Owner object IDs"
+      }
+    },
+    "memberIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Member object IDs"
+      }
+    }
+  },
+  "variables": {
+    "ownersConfig": "[if(not(empty(parameters('ownerIds'))), createObject('relationships', parameters('ownerIds'), 'relationshipSemantics', 'replace'), null())]",
+    "membersConfig": "[if(not(empty(parameters('memberIds'))), createObject('relationships', parameters('memberIds'), 'relationshipSemantics', 'replace'), null())]"
+  },
+  "imports": {
+    "microsoftGraphV1": {
+      "provider": "MicrosoftGraph",
+      "version": "1.0.0"
+    }
+  },
+  "resources": {
+    "group": {
+      "import": "microsoftGraphV1",
+      "type": "Microsoft.Graph/groups@v1.0",
+      "properties": {
+        "uniqueName": "[parameters('displayName')]",
+        "displayName": "[parameters('displayName')]",
+        "description": "[if(not(empty(parameters('groupDescription'))), parameters('groupDescription'), null())]",
+        "mailNickname": "[parameters('mailNickname')]",
+        "mailEnabled": "[parameters('mailEnabled')]",
+        "securityEnabled": "[parameters('securityEnabled')]",
+        "groupTypes": "[if(not(empty(parameters('groupTypes'))), parameters('groupTypes'), null())]",
+        "isAssignableToRole": "[parameters('isAssignableToRole')]",
+        "visibility": "[parameters('visibility')]",
+        "classification": "[if(not(empty(parameters('classification'))), parameters('classification'), null())]",
+        "preferredLanguage": "[if(not(empty(parameters('preferredLanguage'))), parameters('preferredLanguage'), null())]",
+        "preferredDataLocation": "[if(not(empty(parameters('preferredDataLocation'))), parameters('preferredDataLocation'), null())]",
+        "theme": "[if(not(empty(parameters('theme'))), parameters('theme'), null())]",
+        "membershipRule": "[if(not(empty(parameters('membershipRule'))), parameters('membershipRule'), null())]",
+        "membershipRuleProcessingState": "[if(not(empty(parameters('membershipRule'))), parameters('membershipRuleProcessingState'), null())]",
+        "isManagementRestricted": "[parameters('isManagementRestricted')]",
+        "owners": "[variables('ownersConfig')]",
+        "members": "[variables('membersConfig')]"
+      },
+      "metadata": {
+        "description": "Microsoft Graph Group"
+      }
+    }
+  },
+  "outputs": {
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource ID of the group"
+      },
+      "value": "[reference('group').id]"
+    },
+    "groupId": {
+      "type": "string",
+      "metadata": {
+        "description": "The group ID"
+      },
+      "value": "[reference('group').id]"
+    },
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "The display name of the group"
+      },
+      "value": "[reference('group').displayName]"
+    },
+    "mailNickname": {
+      "type": "string",
+      "metadata": {
+        "description": "The mail nickname of the group"
+      },
+      "value": "[reference('group').mailNickname]"
+    },
+    "mailEnabled": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether the group is mail-enabled"
+      },
+      "value": "[reference('group').mailEnabled]"
+    },
+    "securityEnabled": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether the group is security-enabled"
+      },
+      "value": "[reference('group').securityEnabled]"
+    },
+    "groupTypes": {
+      "type": "array",
+      "metadata": {
+        "description": "The group types"
+      },
+      "value": "[reference('group').groupTypes]"
+    },
+    "visibility": {
+      "type": "string",
+      "metadata": {
+        "description": "The group visibility"
+      },
+      "value": "[reference('group').visibility]"
+    }
+  }
+}

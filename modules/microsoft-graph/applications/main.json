@@ -1,0 +1,516 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.37.4.10188",
+      "templateHash": "9285796434470314942"
+    },
+    "name": "Microsoft Graph Application",
+    "description": "Creates and configures an Azure AD application registration",
+    "owner": "Platform Team"
+  },
+  "parameters": {
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Display name for the application"
+      }
+    },
+    "appName": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Application Name (unique identifier)"
+      }
+    },
+    "appDescription": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Description of the application"
+      }
+    },
+    "signInAudience": {
+      "type": "string",
+      "defaultValue": "AzureADMyOrg",
+      "allowedValues": [
+        "AzureADMyOrg",
+        "AzureADMultipleOrgs",
+        "AzureADandPersonalMicrosoftAccount",
+        "PersonalMicrosoftAccount"
+      ],
+      "metadata": {
+        "description": "Optional. Sign-in audience for the application"
+      }
+    },
+    "isFallbackPublicClient": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether this is a fallback public client (for mobile/desktop apps)"
+      }
+    },
+    "isDeviceOnlyAuthSupported": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Whether device-only authentication is supported"
+      }
+    },
+    "webRedirectUris": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Web redirect URIs"
+      }
+    },
+    "spaRedirectUris": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. SPA redirect URIs"
+      }
+    },
+    "publicClientRedirectUris": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Public client redirect URIs (mobile/desktop)"
+      }
+    },
+    "homePageUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Homepage URL for the application"
+      }
+    },
+    "logoutUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Logout URL for the application"
+      }
+    },
+    "defaultRedirectUri": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Default redirect URI"
+      }
+    },
+    "identifierUris": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Application identifier URIs"
+      }
+    },
+    "requiredResourceAccess": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Required resource access (API permissions)"
+      }
+    },
+    "appRoles": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. App roles to be defined for the application"
+      }
+    },
+    "oauth2PermissionScopes": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. OAuth2 permission scopes to expose"
+      }
+    },
+    "preAuthorizedApplications": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Pre-authorized applications"
+      }
+    },
+    "knownClientApplications": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Known client applications"
+      }
+    },
+    "acceptMappedClaims": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Accept mapped claims in API"
+      }
+    },
+    "requestedAccessTokenVersion": {
+      "type": "int",
+      "defaultValue": 2,
+      "allowedValues": [
+        1,
+        2
+      ],
+      "metadata": {
+        "description": "Optional. Requested access token version"
+      }
+    },
+    "enableAccessTokenIssuance": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Enable implicit grant for access tokens"
+      }
+    },
+    "enableIdTokenIssuance": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Optional. Enable implicit grant for ID tokens"
+      }
+    },
+    "groupMembershipClaims": {
+      "type": "string",
+      "defaultValue": "None",
+      "allowedValues": [
+        "None",
+        "SecurityGroup",
+        "DirectoryRole",
+        "ApplicationGroup",
+        "All"
+      ],
+      "metadata": {
+        "description": "Optional. Group membership claims configuration"
+      }
+    },
+    "optionalClaims": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Optional claims configuration"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Tags to apply to the application"
+      }
+    },
+    "notes": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Notes for the application"
+      }
+    },
+    "applicationInfo": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Application info URLs"
+      }
+    },
+    "keyCredentials": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Key credentials (certificates)"
+      }
+    },
+    "passwordCredentials": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Password credentials (client secrets)"
+      }
+    },
+    "ownerIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Owner object IDs"
+      }
+    },
+    "addIns": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Add-ins configuration"
+      }
+    },
+    "authenticationBehaviors": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Authentication behaviors"
+      }
+    },
+    "parentalControlSettings": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Parental control settings"
+      }
+    },
+    "requestSignatureVerification": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Request signature verification settings"
+      }
+    },
+    "serviceManagementReference": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Service management reference"
+      }
+    },
+    "servicePrincipalLockConfiguration": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Service principal lock configuration"
+      }
+    },
+    "tokenEncryptionKeyId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Token encryption key ID"
+      }
+    },
+    "verifiedPublisher": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Verified publisher information"
+      }
+    },
+    "samlMetadataUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. SAML metadata URL"
+      }
+    },
+    "logo": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Application logo (base64 encoded)"
+      }
+    },
+    "nativeAuthenticationApisEnabled": {
+      "type": "string",
+      "defaultValue": "none",
+      "allowedValues": [
+        "none",
+        "all"
+      ],
+      "metadata": {
+        "description": "Optional. Native authentication APIs enabled setting"
+      }
+    },
+    "disabledByMicrosoftStatus": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Disabled by Microsoft status"
+      }
+    },
+    "redirectUriSettings": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Web redirect URI settings with indices"
+      }
+    }
+  },
+  "variables": {
+    "ownersConfig": "[if(not(empty(parameters('ownerIds'))), createObject('relationships', parameters('ownerIds'), 'relationshipSemantics', 'replace'), null())]",
+    "webConfig": "[if(or(or(or(or(or(not(empty(parameters('webRedirectUris'))), not(empty(parameters('homePageUrl')))), not(empty(parameters('logoutUrl')))), parameters('enableAccessTokenIssuance')), parameters('enableIdTokenIssuance')), not(empty(parameters('redirectUriSettings')))), createObject('homePageUrl', if(not(empty(parameters('homePageUrl'))), parameters('homePageUrl'), null()), 'logoutUrl', if(not(empty(parameters('logoutUrl'))), parameters('logoutUrl'), null()), 'redirectUris', parameters('webRedirectUris'), 'implicitGrantSettings', if(or(parameters('enableAccessTokenIssuance'), parameters('enableIdTokenIssuance')), createObject('enableAccessTokenIssuance', parameters('enableAccessTokenIssuance'), 'enableIdTokenIssuance', parameters('enableIdTokenIssuance')), null()), 'redirectUriSettings', parameters('redirectUriSettings')), null())]",
+    "spaConfig": "[if(not(empty(parameters('spaRedirectUris'))), createObject('redirectUris', parameters('spaRedirectUris')), null())]",
+    "publicClientConfig": "[if(not(empty(parameters('publicClientRedirectUris'))), createObject('redirectUris', parameters('publicClientRedirectUris')), null())]",
+    "apiConfig": "[if(or(or(or(or(not(empty(parameters('oauth2PermissionScopes'))), not(empty(parameters('preAuthorizedApplications')))), not(empty(parameters('knownClientApplications')))), parameters('acceptMappedClaims')), not(equals(parameters('requestedAccessTokenVersion'), 2))), createObject('acceptMappedClaims', parameters('acceptMappedClaims'), 'knownClientApplications', parameters('knownClientApplications'), 'oauth2PermissionScopes', parameters('oauth2PermissionScopes'), 'preAuthorizedApplications', parameters('preAuthorizedApplications'), 'requestedAccessTokenVersion', parameters('requestedAccessTokenVersion')), null())]"
+  },
+  "imports": {
+    "microsoftGraphV1": {
+      "provider": "MicrosoftGraph",
+      "version": "1.0.0"
+    }
+  },
+  "resources": {
+    "application": {
+      "import": "microsoftGraphV1",
+      "type": "Microsoft.Graph/applications@v1.0",
+      "properties": {
+        "uniqueName": "[parameters('appName')]",
+        "displayName": "[parameters('displayName')]",
+        "description": "[if(not(empty(parameters('appDescription'))), parameters('appDescription'), null())]",
+        "signInAudience": "[parameters('signInAudience')]",
+        "isFallbackPublicClient": "[parameters('isFallbackPublicClient')]",
+        "isDeviceOnlyAuthSupported": "[parameters('isDeviceOnlyAuthSupported')]",
+        "defaultRedirectUri": "[if(not(empty(parameters('defaultRedirectUri'))), parameters('defaultRedirectUri'), null())]",
+        "identifierUris": "[parameters('identifierUris')]",
+        "requiredResourceAccess": "[parameters('requiredResourceAccess')]",
+        "appRoles": "[parameters('appRoles')]",
+        "groupMembershipClaims": "[if(not(equals(parameters('groupMembershipClaims'), 'None')), parameters('groupMembershipClaims'), null())]",
+        "tags": "[parameters('tags')]",
+        "notes": "[if(not(empty(parameters('notes'))), parameters('notes'), null())]",
+        "info": "[if(not(empty(parameters('applicationInfo'))), parameters('applicationInfo'), null())]",
+        "keyCredentials": "[parameters('keyCredentials')]",
+        "passwordCredentials": "[parameters('passwordCredentials')]",
+        "addIns": "[parameters('addIns')]",
+        "authenticationBehaviors": "[if(not(empty(parameters('authenticationBehaviors'))), parameters('authenticationBehaviors'), null())]",
+        "parentalControlSettings": "[if(not(empty(parameters('parentalControlSettings'))), parameters('parentalControlSettings'), null())]",
+        "requestSignatureVerification": "[if(not(empty(parameters('requestSignatureVerification'))), parameters('requestSignatureVerification'), null())]",
+        "serviceManagementReference": "[if(not(empty(parameters('serviceManagementReference'))), parameters('serviceManagementReference'), null())]",
+        "servicePrincipalLockConfiguration": "[if(not(empty(parameters('servicePrincipalLockConfiguration'))), parameters('servicePrincipalLockConfiguration'), null())]",
+        "tokenEncryptionKeyId": "[if(not(empty(parameters('tokenEncryptionKeyId'))), parameters('tokenEncryptionKeyId'), null())]",
+        "verifiedPublisher": "[if(not(empty(parameters('verifiedPublisher'))), parameters('verifiedPublisher'), null())]",
+        "samlMetadataUrl": "[if(not(empty(parameters('samlMetadataUrl'))), parameters('samlMetadataUrl'), null())]",
+        "logo": "[if(not(empty(parameters('logo'))), parameters('logo'), null())]",
+        "nativeAuthenticationApisEnabled": "[if(not(equals(parameters('nativeAuthenticationApisEnabled'), 'none')), parameters('nativeAuthenticationApisEnabled'), null())]",
+        "disabledByMicrosoftStatus": "[if(not(empty(parameters('disabledByMicrosoftStatus'))), parameters('disabledByMicrosoftStatus'), null())]",
+        "web": "[variables('webConfig')]",
+        "spa": "[variables('spaConfig')]",
+        "publicClient": "[variables('publicClientConfig')]",
+        "api": "[variables('apiConfig')]",
+        "optionalClaims": "[if(not(empty(parameters('optionalClaims'))), parameters('optionalClaims'), null())]",
+        "owners": "[variables('ownersConfig')]"
+      },
+      "metadata": {
+        "description": "Microsoft Graph Application"
+      }
+    }
+  },
+  "outputs": {
+    "resourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "The resource ID of the application"
+      },
+      "value": "[reference('application').id]"
+    },
+    "applicationId": {
+      "type": "string",
+      "metadata": {
+        "description": "The application (client) ID"
+      },
+      "value": "[reference('application').appId]"
+    },
+    "objectId": {
+      "type": "string",
+      "metadata": {
+        "description": "The object ID of the application"
+      },
+      "value": "[reference('application').id]"
+    },
+    "displayName": {
+      "type": "string",
+      "metadata": {
+        "description": "The display name of the application"
+      },
+      "value": "[reference('application').displayName]"
+    },
+    "uniqueName": {
+      "type": "string",
+      "metadata": {
+        "description": "The unique name of the application"
+      },
+      "value": "[reference('application').uniqueName]"
+    },
+    "signInAudience": {
+      "type": "string",
+      "metadata": {
+        "description": "The sign-in audience of the application"
+      },
+      "value": "[reference('application').signInAudience]"
+    },
+    "isFallbackPublicClient": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether this is a fallback public client"
+      },
+      "value": "[reference('application').isFallbackPublicClient]"
+    },
+    "isDeviceOnlyAuthSupported": {
+      "type": "bool",
+      "metadata": {
+        "description": "Whether device-only authentication is supported"
+      },
+      "value": "[reference('application').isDeviceOnlyAuthSupported]"
+    },
+    "identifierUris": {
+      "type": "array",
+      "metadata": {
+        "description": "The application identifier URIs"
+      },
+      "value": "[reference('application').identifierUris]"
+    },
+    "defaultRedirectUri": {
+      "type": "string",
+      "metadata": {
+        "description": "The default redirect URI"
+      },
+      "value": "[if(not(equals(reference('application').defaultRedirectUri, null())), reference('application').defaultRedirectUri, '')]"
+    },
+    "groupMembershipClaims": {
+      "type": "string",
+      "metadata": {
+        "description": "The group membership claims setting"
+      },
+      "value": "[if(not(equals(reference('application').groupMembershipClaims, null())), reference('application').groupMembershipClaims, 'None')]"
+    },
+    "tags": {
+      "type": "array",
+      "metadata": {
+        "description": "Application tags"
+      },
+      "value": "[reference('application').tags]"
+    },
+    "description": {
+      "type": "string",
+      "metadata": {
+        "description": "Application description"
+      },
+      "value": "[if(not(equals(reference('application').description, null())), reference('application').description, '')]"
+    },
+    "webConfiguration": {
+      "type": "object",
+      "metadata": {
+        "description": "Web configuration including redirect URIs and homepage"
+      },
+      "value": "[if(not(equals(reference('application').web, null())), reference('application').web, createObject())]"
+    },
+    "spaConfiguration": {
+      "type": "object",
+      "metadata": {
+        "description": "SPA configuration including redirect URIs"
+      },
+      "value": "[if(not(equals(reference('application').spa, null())), reference('application').spa, createObject())]"
+    },
+    "publicClientConfiguration": {
+      "type": "object",
+      "metadata": {
+        "description": "Public client configuration including redirect URIs"
+      },
+      "value": "[if(not(equals(reference('application').publicClient, null())), reference('application').publicClient, createObject())]"
+    },
+    "apiConfiguration": {
+      "type": "object",
+      "metadata": {
+        "description": "API configuration including OAuth2 permissions and pre-authorized apps"
+      },
+      "value": "[if(not(equals(reference('application').api, null())), reference('application').api, createObject())]"
+    }
+  }
+}

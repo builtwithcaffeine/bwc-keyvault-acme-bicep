@@ -1,0 +1,96 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "_comment_basic_user": {
+      "value": "=== BASIC USER REFERENCE - Simple user lookup by UPN ==="
+    },
+    "userPrincipalName": {
+      "value": "john.doe@contoso.com"
+    },
+    
+    "_comment_examples": {
+      "value": "=== ADDITIONAL EXAMPLES (uncomment to use) ==="
+    },
+    
+    "_example_executive": {
+      "value": {
+        "description": "Executive user reference",
+        "userPrincipalName": "ceo@contoso.com"
+      }
+    },
+    
+    "_example_admin": {
+      "value": {
+        "description": "Administrative user reference", 
+        "userPrincipalName": "admin@contoso.com"
+      }
+    },
+    
+    "_example_service_account": {
+      "value": {
+        "description": "Service account reference",
+        "userPrincipalName": "service-account@contoso.com"
+      }
+    },
+    
+    "_example_guest_user": {
+      "value": {
+        "description": "External partner/guest user reference",
+        "userPrincipalName": "partner_contoso.com#EXT#@contoso.onmicrosoft.com"
+      }
+    },
+    
+    "_example_department_lead": {
+      "value": {
+        "description": "Department manager reference",
+        "userPrincipalName": "it-manager@contoso.com"
+      }
+    },
+    
+    "_example_project_manager": {
+      "value": {
+        "description": "Project manager reference",
+        "userPrincipalName": "project.manager@contoso.com"
+      }
+    },
+    
+    "_example_shared_mailbox": {
+      "value": {
+        "description": "Shared mailbox user reference",
+        "userPrincipalName": "support@contoso.com"
+      }
+    },
+    
+    "_example_contractor": {
+      "value": {
+        "description": "Contractor/temporary worker reference",
+        "userPrincipalName": "contractor.smith@contoso.com"
+      }
+    },
+    
+    "_example_breakglass": {
+      "value": {
+        "description": "Emergency access account (use with extreme caution)",
+        "userPrincipalName": "emergency-access@contoso.com"
+      }
+    },
+    
+    "_usage_notes": {
+      "value": {
+        "purpose": "This module REFERENCES existing users only - it does not create new users",
+        "input_format": "User Principal Name (UPN) in email format",
+        "guest_format": "originalEmail_domain.com#EXT#@tenant.onmicrosoft.com", 
+        "common_uses": [
+          "Getting user IDs for role assignments",
+          "Retrieving user information for application permissions", 
+          "Validating user existence before granting access",
+          "Building user lists for group management",
+          "Fetching user details for reporting and auditing"
+        ],
+        "team_operations": "For bulk operations, use arrays in your calling template",
+        "security_note": "Always verify user permissions and follow principle of least privilege"
+      }
+    }
+  }
+}

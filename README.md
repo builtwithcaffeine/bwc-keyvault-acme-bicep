@@ -1,141 +1,246 @@
-# Key Vault ACME :: Bicep Deployment
-This repository is based on the keyvault-acmebot project, which is an open-source tool designed to automate the issuance and renewal of SSL/TLS certificates using the ACME (Automated Certificate Management Environment) protocol, specifically integrating with Azure Key Vault.
+# Azure Key Vault ACME Certificate Management
 
-> [!NOTE]
-> This side project is being activily worked on. I'm currently looking at the Private EndPoint configuration options to ensure a more secure deployment option. -
-> Simon - December 2024
+This repository contains Azure Bicep templates for deploying an automated ACME (Automated Certificate Management Environment) certificate management solution using Azure Key Vault. The solution automates the process of requesting, renewing, and managing SSL/TLS certificates from ACME certificate authorities like Let's Encrypt.
 
-## Project Overview
-The [keyvault-acme](https://github.com/shibayan/keyvault-acmebot) project automates SSL/TLS certificate management in Azure Key Vault using the ACME protocol. It helps users request, store, and renew certificates with minimal manual intervention, making it especially useful for Azure-hosted websites and services.
+## Overview
 
-### Key Components
-- ACME Protocol: The protocol used by certificate authorities like Let's Encrypt to automate certificate issuance, renewal, and revocation.
-- Azure Key Vault: Azure's cloud service for securely managing secrets, keys, and certificates.
-- keyvault-acme Project: Automates SSL/TLS certificate management in Azure Key Vault using ACME-compliant certificate authorities (e.g., Let's Encrypt).
+This infrastructure-as-code solution deploys the following Azure resources:
 
-### Features
-- Automated Certificate Requests: Automatically requests SSL/TLS certificates from ACME-compliant authorities.
-- Secure Storage: Stores issued certificates securely in Azure Key Vault.
-- Automated Renewal: Automatically renews certificates before expiration.
+- **Azure Key Vault** - Secure storage for certificates and secrets
+- **User Managed Identity** - Identity for automated certificate management
+- **Azure Function App** - Automated certificate renewal logic
+- **App Service Plan** - Hosting for the Function App
+- **Storage Account** - Required for Function App runtime
+- **Log Analytics Workspace** - Centralized logging and monitoring
+- **Application Insights** - Application performance monitoring
+- **Virtual Network** (optional) - Network isolation and security
+- **Private DNS Zones** (optional) - Private endpoint DNS resolution
+- **Microsoft Graph Integration** - Application registration for authentication
 
-This project simplifies SSL certificate management for Azure users, reducing the need for manual intervention.
+## Prerequisites
 
-> [!NOTE]
-> This deployment focuses mainly on Azure DNS Zones.
+Before deploying this solution, ensure you have:
 
-This said though, the Keyvault ACME project supports lots more DNS Providers. [DNS-Provider-Configuration](https://github.com/shibayan/keyvault-acmebot/wiki/DNS-Provider-Configuration)
+- **Azure Subscription** with appropriate permissions
+- **Azure CLI** installed and up-to-date
+- **Bicep CLI** installed and up-to-date
+- **PowerShell** 7.0 or later
+- **Contributor** or **Owner** role on the target subscription
+- **Application Administrator** role in Azure AD (for app registration)
 
-## Deployment Instructions
-
-> [!IMPORTANT]
-> Please note, this solution uses **Access Policies** for Access/Authentication
-
-### Prerequisites
-Before you begin, ensure that you have both Azure CLI and Azure Bicep installed. To install, run the following in an administrative context:
-
-``` powershell
-$appList = ('Git.Git', 'Microsoft.AzureCLI', 'Microsoft.Bicep')
-foreach ($app in $appList) {
-    winget install --scope Machine --exact --id $app
-}
-```
-
-### Clone the Repository
-
->Clone the repository to your local machine:
->
-``` powershell
-git clone https://github.com/builtwithcaffeine/bwc-keyvault-acme-bicep.git
-Set-Location -Path 'bwc-keyvault-acme-bicep'
-```
-## Configure Parameters
-Open `main.bicepparam`
-
-``` bicep
-using './main.bicep'
-
-// Default Values
-param subscriptionId = ''
-param spAppId = ''
-param spAuthSecret = ''
-param userId = ''
-param deployedBy = ''
-param environmentType = 'dev'
-param location = ''
-param locationShortCode = ''
-
-// Enable Private End Point Configuration and Virtual Network Configuration
-param enablePrivateEndPoint = false
-
-// Customer Name
-var customerName = 'bwc'
-
-// Service Principal Name
-param spName = 'sp-${customerName}-kvacme-letsencrypt-${environmentType}'
-
-// Resource Names
-param resourceGroupName = 'rg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param managedIdentityName = 'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param keyVaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param storageAccountName = 'st${customerName}kvacme${locationShortCode}'
-param logAnalyticsWorkspaceName = 'log-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param appInsightsName = 'appi-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param appServicePlanName = 'asp-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param functionAppName = 'func-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-
-// Network Parameters
-param virtualNetworkCidr = '192.168.0.0/24'
-param virtualNetworkSubnet = '192.168.0.0/24'
-
-// Key Vault ACME Parameters
-param acmeMailAddress = 'alerts@builtwithcaffeine.cloud'
-param acmeEndPoint = 'https://acme-v02.api.letsencrypt.org/'
+## Project Structure
 
 ```
-
-## Execute the Bicep Deployment
-Run the deployment script to create and configure the necessary resources. Replace <subscription-id> with your Azure subscription ID, and specify the environment type (e.g., [dev], [acc], or [prod]):
-
-``` powershell
-.\Invoke-AzDeployment.ps1 -targetScope 'sub' -subscriptionId '00000000-0000-0000-0000-000000000000' -environmentType 'dev' -location 'westeurope' -deploy
+.
+├── main.bicep                          # Main Bicep template
+├── param.main.bicepparam               # Parameters file
+├── Invoke-AzDeployment.ps1             # Deployment script
+├── bicepconfig.json                    # Bicep configuration
+└── modules/
+    └── microsoft-graph/                # Microsoft Graph integration modules
+        ├── applications/               # App registration deployment
+        ├── servicePrincipals/          # Service principal management
+        ├── federatedIdentityCredentials/ # Federated identity credentials
+        ├── groups/                     # Azure AD group management
+        ├── users/                      # Azure AD user management
+        ├── oauth2PermissionGrants/     # OAuth2 permissions
+        └── appRoleAssignedTo/          # App role assignments
 ```
 
-### Deployment Diagram
+## Configuration
 
-![image](https://github.com/user-attachments/assets/188e128f-7993-417e-bf2b-ddff118e8931)
+### Parameters File
 
-## Operating Instructions
-Once the deployment is completed, (Takes around 5 miuntes, after 6 hours of build time :D). Head to the function app and open the Default domain url:
+Edit the `param.main.bicepparam` file to configure your deployment:
 
-![](https://github.com/user-attachments/assets/95de93b9-3a16-442d-8fe8-8782374969b8)
+```bicep
+// Core Configuration
+param customerName = 'bwc'              # Customer/organization identifier
+param environmentType = 'dev'           # Environment: dev, acc, or prod
+param location = 'westeurope'           # Azure region
+param locationShortCode = 'weu'         # Location abbreviation
+param deployedBy = ''                   # Deployment identifier
 
-### First Time
-When you first open the function app, You'll need to authenticate the Enterprise App.
+// Azure Network Configuration
+param enableCreateVirtualNetwork = true # Create new virtual network
+param virtualNetworkAddressPrefix = '10.0.0.0/24'
+param virtualNetworkSubnetShared = '10.0.0.0/28'
+param virtualNetworkSubnetAppService = '10.0.0.16/28'
 
-![](https://github.com/user-attachments/assets/491bd256-f77b-47c0-8c7b-9b0465dcc42d)
+// Key Vault Configuration
+param createWithKeyVault = true         # Create new Key Vault
+param existingKeyVaultResourceGroup = '' # Use existing KV (optional)
+param existingKeyVaultName = ''         # Existing KV name (optional)
 
-## Key Vault ACME Portal
+// Private DNS Configuration
+param enableCreatePrivateDnsZones = false # Create private DNS zones
+```
 
-![](https://github.com/user-attachments/assets/21c07349-8b2e-47ce-9eba-749aa8b80501)
+### Resource Naming Convention
 
-Here is the portal for the Key Vault ACME, If you want to create a record click `Add`
-From the DNS Zone, You can pick from Azure Public DNS or Azure Private DNS Zone.
+Resources follow Azure naming best practices:
 
-![](https://github.com/user-attachments/assets/24abc19c-7b15-4f02-aaa5-709e03979652)
+- Resource Group: `rg-x-{customer}-kvacme-{env}-{location}`
+- Key Vault: `kv-{customer}-kvacme-{env}-{location}`
+- Function App: `func-{customer}-kvacme-{env}-{location}`
+- Storage Account: `st{customer}kvacme{env}{location}`
+- Managed Identity: `id-{customer}-kvacme-{env}-{location}`
 
-<details closed>
-<summary>Advanced Options</summary>
-<br>
+## Deployment
 
-![](https://github.com/user-attachments/assets/11d2047a-cd9d-4861-8525-6cb8b64832e4)
+### Option 1: Using the PowerShell Script (Recommended)
 
-</details>
+The repository includes a comprehensive deployment script with validation and error handling:
 
-Click Add,
+```powershell
+# Deploy to subscription scope
+.\Invoke-AzDeployment.ps1 `
+    -targetScope sub `
+    -subscriptionId "b67e1026-b589-41e2-b41f-73f8803f71a0" `
+    -customerName bwc `
+    -environmentType dev `
+    -location westeurope `
+    -deploy
+```
 
-![](https://github.com/user-attachments/assets/5ad558b0-cc8f-4bfc-b859-2aab91255ee9)
+#### Script Parameters
 
-Finally, Checking the Azure Key Vault we can see the certificate
+- **`-targetScope`** - Deployment scope: `tenant`, `mgmt`, or `sub`
+- **`-subscriptionId`** - Azure subscription ID (36-character GUID)
+- **`-customerName`** - Customer/organization identifier
+- **`-environmentType`** - Environment type: `dev`, `acc`, or `prod`
+- **`-location`** - Azure region for deployment
+- **`-deploy`** - Switch to execute the deployment (without this, it validates only)
 
-![](https://github.com/user-attachments/assets/542e0a5c-b0e1-4884-ad84-86047579c9d1)
+### Option 2: Using Azure CLI
+
+```powershell
+# Login to Azure
+az login
+
+# Set subscription
+az account set --subscription "b67e1026-b589-41e2-b41f-73f8803f71a0"
+
+# Deploy using Bicep
+az deployment sub create `
+    --name "kvacme-deployment-$(Get-Date -Format 'yyyyMMdd-HHmmss')" `
+    --location westeurope `
+    --template-file .\main.bicep `
+    --parameters .\param.main.bicepparam
+```
+
+### Option 3: What-If Validation
+
+Preview changes before deployment:
+
+```powershell
+az deployment sub what-if `
+    --location westeurope `
+    --template-file .\main.bicep `
+    --parameters .\param.main.bicepparam
+```
+
+## Deployment Features
+
+The `Invoke-AzDeployment.ps1` script includes:
+
+- ✅ Azure CLI and Bicep version validation
+- ✅ Automatic authentication handling
+- ✅ Parameter validation and sanitization
+- ✅ Location short code mapping
+- ✅ Deployment tracking with unique GUIDs
+- ✅ Comprehensive error handling
+- ✅ Support for service principal authentication
+- ✅ What-if preview capability
+
+## Post-Deployment Configuration
+
+After deployment, you'll need to:
+
+1. **Configure ACME Provider**
+   - Set up Let's Encrypt or other ACME CA credentials
+   - Configure ACME account in Key Vault
+
+2. **Configure DNS Validation**
+   - Set up DNS provider credentials
+   - Configure automated DNS challenge handling
+
+3. **Set Function App Settings**
+   - Configure certificate renewal schedules
+   - Set notification endpoints
+   - Configure retry policies
+
+4. **Grant Permissions**
+   - Ensure managed identity has Key Vault certificate permissions
+   - Configure DNS provider API access
+
+## Monitoring and Maintenance
+
+### Log Analytics
+
+Monitor deployments and operations through Log Analytics workspace:
+
+```powershell
+# Query Function App logs
+az monitor log-analytics query `
+    -w <workspace-id> `
+    --analytics-query "FunctionAppLogs | where TimeGenerated > ago(24h)"
+```
+
+### Application Insights
+
+View application metrics and traces in Application Insights for troubleshooting and performance monitoring.
+
+## Security Considerations
+
+- All secrets are stored in Azure Key Vault
+- Managed identities are used for authentication (no stored credentials)
+- Private endpoints can be enabled for network isolation
+- RBAC is enforced at all resource levels
+- Audit logging is enabled by default
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Deployment fails with permission errors**
+   - Ensure you have Contributor/Owner role on subscription
+   - Verify Application Administrator role in Azure AD
+
+2. **Key Vault name conflicts**
+   - Key Vault names must be globally unique
+   - Modify `customerName` or `locationShortCode` parameters
+
+3. **Virtual network address conflicts**
+   - Adjust `virtualNetworkAddressPrefix` to avoid conflicts
+   - Ensure subnet ranges don't overlap with existing networks
+
+## Contributing
+
+When contributing to this repository:
+
+1. Follow Azure naming conventions
+2. Test deployments in dev environment first
+3. Update documentation for new features
+4. Include parameter examples in bicepparam files
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Support
+
+For issues and questions:
+
+- Create an issue in the repository
+- Review existing documentation in `modules/` folders
+- Check Azure documentation for service-specific guidance
+
+## Additional Resources
+
+- [Azure Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
+- [Azure Key Vault Documentation](https://learn.microsoft.com/azure/key-vault/)
+- [Let's Encrypt Documentation](https://letsencrypt.org/docs/)
+- [ACME Protocol Specification](https://datatracker.ietf.org/doc/html/rfc8555)
+
+---

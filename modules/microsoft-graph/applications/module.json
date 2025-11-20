@@ -1,0 +1,72 @@
+{
+  "version": "2.0.0",
+  "name": "Microsoft Graph Application Module",
+  "description": "Comprehensive Bicep module for creating and configuring Azure AD application registrations with full Microsoft Graph API support",
+  "author": "Platform Team",
+  "apiVersion": "v1.0",
+  "provider": "Microsoft.Graph",
+  "resourceType": "applications",
+  "changelog": [
+    {
+      "version": "2.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Complete rewrite with comprehensive Microsoft Graph API support",
+        "Added support for all Microsoft Graph application properties",
+        "Enhanced security features (authentication behaviors, signature verification)",
+        "Enterprise features (verified publisher, service management, token encryption)",
+        "Advanced credential management (key and password credentials)",
+        "Comprehensive API configuration (pre-authorized apps, known clients)",
+        "Rich metadata support (application info, logos, tags, notes)",
+        "Owner management and access control",
+        "Parental controls and compliance features",
+        "Native authentication API support",
+        "SAML metadata configuration",
+        "Advanced redirect URI settings",
+        "Updated documentation with extensive examples"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2025-09-18",
+      "changes": [
+        "Initial release",
+        "Support for web applications",
+        "Support for single-page applications (SPA)",
+        "Support for public client applications",
+        "Support for API applications with app roles and scopes",
+        "Comprehensive parameter validation",
+        "Dynamic configuration based on provided parameters",
+        "Complete documentation and examples"
+      ]
+    }
+  ],
+  "features": [
+    "Complete Microsoft Graph application resource support",
+    "Multi-platform application types (Web, SPA, Mobile/Desktop, API)",
+    "Advanced security and authentication behaviors",
+    "Enterprise-ready features (verified publisher, token encryption)",
+    "Comprehensive credential management",
+    "Rich API configuration (OAuth2 scopes, pre-authorized apps)",
+    "Metadata and branding support (logos, application info)",
+    "Access control and owner management",
+    "Compliance features (parental controls, signature verification)",
+    "SAML integration support",
+    "Native authentication API configuration",
+    "Flexible redirect URI management",
+    "Extensive parameter validation and smart defaults"
+  ],
+  "requirements": {
+    "bicep": ">=0.20.0",
+    "provider": "Microsoft.Graph",
+    "permissions": [
+      "Application.ReadWrite.All"
+    ]
+  },
+  "examples": {
+    "basic": "./README.md#basic-web-application",
+    "spa": "./README.md#single-page-application-spa", 
+    "api": "./README.md#api-with-app-roles",
+    "test": "./test/main.test.bicep"
+  }
+}
