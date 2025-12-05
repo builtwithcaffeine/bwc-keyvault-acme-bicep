@@ -156,17 +156,24 @@ var ownersConfig = !empty(ownerIds) ? {
   relationshipSemantics: 'append'
 } : null
 
-// Web configuration
-var webConfig = (!empty(webRedirectUris) || !empty(homePageUrl) || !empty(logoutUrl) || enableAccessTokenIssuance || enableIdTokenIssuance || !empty(redirectUriSettings)) ? {
+// Web configuration - build base object
+var webConfigBase = {
   homePageUrl: !empty(homePageUrl) ? homePageUrl : null
   logoutUrl: !empty(logoutUrl) ? logoutUrl : null
-  redirectUris: webRedirectUris
+  redirectUris: !empty(webRedirectUris) ? webRedirectUris : []
   implicitGrantSettings: (enableAccessTokenIssuance || enableIdTokenIssuance) ? {
     enableAccessTokenIssuance: enableAccessTokenIssuance
     enableIdTokenIssuance: enableIdTokenIssuance
   } : null
+}
+
+// Add redirectUriSettings only if not empty
+var webConfigWithSettings = !empty(redirectUriSettings) ? union(webConfigBase, {
   redirectUriSettings: redirectUriSettings
-} : null
+}) : webConfigBase
+
+// Final web config - only set if any web properties are configured
+var webConfig = (!empty(webRedirectUris) || !empty(homePageUrl) || !empty(logoutUrl) || enableAccessTokenIssuance || enableIdTokenIssuance || !empty(redirectUriSettings)) ? webConfigWithSettings : null
 
 // SPA configuration
 var spaConfig = !empty(spaRedirectUris) ? {
