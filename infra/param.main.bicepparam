@@ -17,11 +17,11 @@ param createWithKeyVault = true
 param existingKeyVaultResourceGroup = ''
 param existingKeyVaultName = ''
 
-// Azure Network
-param enableCreatePrivateDnsZones = true
+// Azure Network - Private Dns Zones
+param enableCreatePrivateDnsZones = false
 
 // Azure Network - New Virtual Network
-param enableCreateVirtualNetwork = true
+param enableCreateVirtualNetwork = false
 param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
 param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
@@ -30,8 +30,9 @@ param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
 // Azure Network - Existing Virtual Network
 param existingVirtualNetworkResourceGroup = 'rg-builtwithcaffeine-hub-weu'
 param existingVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
-param existingVirtualNetworkSubnetSharedName = 'snet-shared-hub-prod-weu'
-param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice-hub-prod-weu'
+param existingVirtualNetworkSubnetSharedName = 'snet-shared-resource'
+param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice'
+
 //
 // Azure DNS Zones
 param enablePublicDnsRoleAssignment = true

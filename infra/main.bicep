@@ -229,14 +229,14 @@ resource privateDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01
   name: privateDnsZonesArray[1]
 }
 
-// Private End Point - Storage Account (Table)
-resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+// Private End Point - Storage Account (File)
+resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[2]
 }
 
-// Private End Point - Storage Account (File)
-resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+// Private End Point - Storage Account (Table)
+resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[3]
 }
@@ -272,55 +272,6 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.2' = 
     tags: tags
   }
 }
-
-
-
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = if (enableCreateVirtualNetwork) {
-  name: 'create-virtual-network'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    name: virtualNetworkName
-    location: location
-    addressPrefixes: [
-      virtualNetworkAddressPrefix
-    ]
-    subnets: [
-      {
-        name: 'snet-shared-resources'
-        addressPrefix: virtualNetworkSubnetShared
-      }
-      {
-        name: 'snet-kvacme-appservice'
-        addressPrefix: virtualNetworkSubnetAppService
-        delegation: 'Microsoft.Web/serverFarms'
-      }
-    ]
-    tags: tags
-  }
-  dependsOn: [
-    createResourceGroup
-  ]
-}
-
-module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
-  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
-    name: 'create-private-dns-zone-${replace(privateDnsZone, '.', '-')}'
-    scope: resourceGroup(resourceGroupName)
-    params: {
-      name: privateDnsZone
-      location: 'global'
-      virtualNetworkLinks: [
-        {
-          virtualNetworkResourceId: createVirtualNetwork.outputs.resourceId
-        }
-      ]
-      tags: tags
-    }
-    dependsOn: [
-      createVirtualNetwork
-    ]
-  }
-]
 
 // Create Entra Security Group
 module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
@@ -384,6 +335,53 @@ module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' =
     createResourceGroup
   ]
 }
+
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = if (enableCreateVirtualNetwork) {
+  name: 'create-virtual-network'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    name: virtualNetworkName
+    location: location
+    addressPrefixes: [
+      virtualNetworkAddressPrefix
+    ]
+    subnets: [
+      {
+        name: 'snet-shared-resources'
+        addressPrefix: virtualNetworkSubnetShared
+      }
+      {
+        name: 'snet-kvacme-appservice'
+        addressPrefix: virtualNetworkSubnetAppService
+        delegation: 'Microsoft.Web/serverFarms'
+      }
+    ]
+    tags: tags
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
+module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
+  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
+    name: 'create-private-dns-zone-${replace(privateDnsZone, '.', '-')}'
+    scope: resourceGroup(resourceGroupName)
+    params: {
+      name: privateDnsZone
+      location: 'global'
+      virtualNetworkLinks: [
+        {
+          virtualNetworkResourceId: createVirtualNetwork.outputs.resourceId
+        }
+      ]
+      tags: tags
+    }
+    dependsOn: [
+      createVirtualNetwork
+    ]
+  }
+]
 
 module createFederatedCredential 'modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
   name: 'create-entra-federated-credential'
