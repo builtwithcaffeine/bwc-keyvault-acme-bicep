@@ -104,7 +104,7 @@ param existingVirtualNetworkSubnetAppServiceName string
 param appServiceKind string = 'windows'
 
 @description('App Service Sku Name')
-@allowed(['B1','B2'])
+@allowed(['B1', 'B2'])
 param appServiceSkuName string = 'B1'
 
 // Azure Key Vault
@@ -186,13 +186,13 @@ var selectedKeyVaultName = createWithKeyVault ? keyvaultName : existingKeyVaultN
 
 @description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
-  'privatelink.vaultcore.azure.net'
-  'privatelink.blob.${environment().suffixes.storage}'
-  'privatelink.table.${environment().suffixes.storage}'
-  'privatelink.file.${environment().suffixes.storage}'
-  'privatelink.queue.${environment().suffixes.storage}'
-  'privatelink.azurewebsites.net'
-  'scm.privatelink.azurewebsites.net'
+  'privatelink.vaultcore.azure.net' // [0]
+  'privatelink.blob.${environment().suffixes.storage}' // [1]
+  'privatelink.file.${environment().suffixes.storage}' // [2]
+  'privatelink.table.${environment().suffixes.storage}' // [3]
+  'privatelink.queue.${environment().suffixes.storage}' // [4]
+  'privatelink.azurewebsites.net' // [5]
+  'scm.privatelink.azurewebsites.net' // [6]
 ]
 
 //
@@ -254,7 +254,7 @@ resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01'
 }
 
 // Private End Point - Web Site SCM
-resource privateDnsZoneAzureSitesSCM 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneAzureSitesScm 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[6]
 }
@@ -273,20 +273,7 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.2' = 
   }
 }
 
-module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
-  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
-    name: 'create-private-dns-zone-${replace(privateDnsZone, '.', '-')}'
-    scope: resourceGroup(resourceGroupName)
-    params: {
-      name: privateDnsZone
-      location: 'global'
-      tags: tags
-    }
-    dependsOn: [
-      createResourceGroup
-    ]
-  }
-]
+
 
 module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network'
@@ -315,21 +302,25 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = 
   ]
 }
 
-module linkPrivateDnsZones 'br/public:avm/ptn/network/private-link-private-dns-zones:0.7.0' = if (enableCreateVirtualNetwork) {
-  name: 'link-private-dns-zones'
-  scope: resourceGroup(enableCreateVirtualNetwork ? resourceGroupName : sharedResourceGroupName)
-  params: {
-    privateLinkPrivateDnsZones: privateDnsZonesArray
-    virtualNetworkLinks: [
-      {
-        virtualNetworkResourceId: createVirtualNetwork.outputs.resourceId
-      }
+module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.0' = [
+  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
+    name: 'create-private-dns-zone-${replace(privateDnsZone, '.', '-')}'
+    scope: resourceGroup(resourceGroupName)
+    params: {
+      name: privateDnsZone
+      location: 'global'
+      virtualNetworkLinks: [
+        {
+          virtualNetworkResourceId: createVirtualNetwork.outputs.resourceId
+        }
+      ]
+      tags: tags
+    }
+    dependsOn: [
+      createVirtualNetwork
     ]
   }
-  dependsOn: [
-    createVirtualNetwork
-  ]
-}
+]
 
 // Create Entra Security Group
 module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
@@ -462,7 +453,9 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = if (createWit
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneKeyVault.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[0].outputs.resourceId
+                : privateDnsZoneKeyVault.id
             }
           ]
         }
@@ -475,6 +468,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = if (createWit
   ]
 }
 
+// Update Key Vault - if (!createWithKeyVault) - $false
 module updateKeyVaultUserManagedIdentity 'br/public:avm/res/key-vault/vault/access-policy:0.1.0' = if (!createWithKeyVault) {
   scope: resourceGroup(existingKeyVaultResourceGroup)
   params: {
@@ -524,7 +518,9 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneStorageBlob.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[1].outputs.resourceId //blob
+                : privateDnsZoneStorageBlob.id
             }
           ]
         }
@@ -537,7 +533,9 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneStorageFile.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[2].outputs.resourceId // file
+                : privateDnsZoneStorageFile.id
             }
           ]
         }
@@ -550,7 +548,9 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneStorageTable.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[3].outputs.resourceId // table
+                : privateDnsZoneStorageTable.id
             }
           ]
         }
@@ -563,7 +563,9 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneStorageQueue.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[4].outputs.resourceId // queue
+                : privateDnsZoneStorageQueue.id
             }
           ]
         }
@@ -662,8 +664,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
         properties: {
           // Function App Values
           FUNCTIONS_EXTENSION_VERSION: '~4'
-          FUNCTIONS_WORKER_RUNTIME: 'dotnet'
-          FUNCTIONS_INPROC_NET8_ENABLED: '1'
+          FUNCTIONS_WORKER_RUNTIME: 'dotnet-isolated'
 
           // Application Insights
           APPINSIGHTS_INSTRUMENTATIONKEY: createApplicationInsights.outputs.instrumentationKey
@@ -740,30 +741,34 @@ module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
     }
     privateEndpoints: [
       {
+        subnetResourceId: enableCreateVirtualNetwork
+          ? createVirtualNetwork.outputs.subnetResourceIds[0]
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneAzureSites.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[5].outputs.resourceId
+                : privateDnsZoneAzureSites.id
             }
           ]
         }
         tags: tags
-        subnetResourceId: enableCreateVirtualNetwork
-          ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : existingVirtualNetworkSubnetShared.id
       }
       {
+        subnetResourceId: enableCreateVirtualNetwork
+          ? createVirtualNetwork.outputs.subnetResourceIds[0]
+          : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: privateDnsZoneAzureSitesSCM.id
+              privateDnsZoneResourceId: enableCreateVirtualNetwork
+                ? createPrivateDnsZones[6].outputs.resourceId
+                : privateDnsZoneAzureSitesScm.id
             }
           ]
         }
         tags: tags
-        subnetResourceId: enableCreateVirtualNetwork
-          ? createVirtualNetwork.outputs.subnetResourceIds[0]
-          : existingVirtualNetworkSubnetShared.id
       }
     ]
     tags: tags
