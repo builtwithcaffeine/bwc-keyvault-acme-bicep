@@ -72,7 +72,4 @@ param acmeKeyVaultUrlBase = 'https://${acmeKeyVaultName}.vault.azure.net/'
 param acmeContacts = 'alerts@builtwithcaffeine.cloud'
 
 //@description('Key Vault ACME Package URL')
-var v4PackageUrl = 'https://stacmebotprod.blob.core.windows.net/keyvault-acmebot/v4/latest.zip'
-var v5PackageUrl = 'https://stacmebotprod.blob.core.windows.net/keyvault-acmebot/v5/latest.zip'
-
-param acmeKvACMEPackage = v5PackageUrl
+param acmeKvACMEPackage = 'https://stacmebotprod.blob.core.windows.net/keyvault-acmebot/v5/latest.zip'
