@@ -30,7 +30,7 @@ param tags object = {
 // Parameters [Created Resources]
 
 @description('Resource Group Name')
-param resourceGroupName string = 'rg-x-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param resourceGroupName string = 'rg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
 @description('Key Vault Name')
 param keyvaultName string = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
@@ -186,28 +186,28 @@ var selectedKeyVaultName = createWithKeyVault ? keyvaultName : existingKeyVaultN
 
 @description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
-  'privatelink.vaultcore.azure.net' // [0]
-  'privatelink.blob.${environment().suffixes.storage}' // [1]
-  'privatelink.file.${environment().suffixes.storage}' // [2]
-  'privatelink.table.${environment().suffixes.storage}' // [3]
-  'privatelink.queue.${environment().suffixes.storage}' // [4]
-  'privatelink.azurewebsites.net' // [5]
-  'scm.privatelink.azurewebsites.net' // [6]
+  'privatelink.vaultcore.azure.net'                      // [0]
+  'privatelink.blob.${environment().suffixes.storage}'   // [1]
+  'privatelink.file.${environment().suffixes.storage}'   // [2]
+  'privatelink.table.${environment().suffixes.storage}'  // [3]
+  'privatelink.queue.${environment().suffixes.storage}'  // [4]
+  'privatelink.azurewebsites.net'                        // [5]
+  'scm.privatelink.azurewebsites.net'                    // [6]
 ]
 
 //
 // Azure Resource - [Existing]
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
   scope: resourceGroup(existingVirtualNetworkResourceGroup)
   name: existingVirtualNetworkName
 }
 
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingVirtualNetworkSubnetSharedName
 }
 
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-01-01' existing = if (!enableCreateVirtualNetwork) {
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingVirtualNetworkSubnetAppServiceName
 }
@@ -264,7 +264,7 @@ resource privateDnsZoneAzureSitesScm 'Microsoft.Network/privateDnsZones@2024-06-
 //
 
 // Create Resource Group
-module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.2' = {
+module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.3' = {
   name: 'create-resource-group'
   params: {
     name: resourceGroupName
@@ -336,7 +336,7 @@ module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' =
   ]
 }
 
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.1' = if (enableCreateVirtualNetwork) {
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.7.2' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -418,7 +418,7 @@ module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bi
 }
 
 // Create User Managed Identity
-module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.2' = {
+module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.0' = {
   name: 'create-user-managed-identity'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -478,7 +478,7 @@ module updateKeyVaultUserManagedIdentity 'br/public:avm/res/key-vault/vault/acce
   ]
 }
 
-module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' = {
+module createStorageAccount 'br/public:avm/res/storage/storage-account:0.31.0' = {
   name: 'create-storage-account'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -576,7 +576,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.29.0' =
   ]
 }
 
-module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.13.0' = {
+module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.15.0' = {
   name: 'create-log-analytics-workspace'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -591,7 +591,7 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
   ]
 }
 
-module createApplicationInsights 'br/public:avm/res/insights/component:0.7.0' = {
+module createApplicationInsights 'br/public:avm/res/insights/component:0.7.1' = {
   name: 'create-application-insights'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -605,7 +605,7 @@ module createApplicationInsights 'br/public:avm/res/insights/component:0.7.0' = 
   ]
 }
 
-module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.5.0' = {
+module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.6.0' = {
   name: 'create-app-service-plan'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -621,7 +621,7 @@ module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.5.0' = {
   ]
 }
 
-module createFunctionApp 'br/public:avm/res/web/site:0.19.4' = {
+module createFunctionApp 'br/public:avm/res/web/site:0.21.0' = {
   name: 'create-function-app'
   scope: resourceGroup(resourceGroupName)
   params: {
