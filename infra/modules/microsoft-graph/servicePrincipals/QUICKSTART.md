@@ -7,8 +7,8 @@ Get service principals configured for enterprise authentication in **under 3 min
 ## ⚡ Prerequisites
 
 - Azure CLI 2.50+ or Azure PowerShell 10.0+
-- Azure AD permissions: **Application Administrator** or **Global Administrator**
-- Existing Azure AD Application (or use our [Applications module](../applications/QUICKSTART.md))
+- Microsoft Entra permissions: **Application Administrator** or **Global Administrator**
+- Existing Microsoft Entra application (or use our [Applications module](../applications/QUICKSTART.md))
 
 ```bash
 # Verify prerequisites
@@ -48,7 +48,7 @@ az deployment group create \
 az deployment group show \
   --resource-group "rg-quickstart" \
   --name "quickstart-sp-deployment" \
-  --query "properties.outputs.{objectId:objectId.value,appId:appId.value,displayName:displayName.value}"
+  --query "properties.outputs.{servicePrincipalId:servicePrincipalId.value,appId:appId.value,displayName:displayName.value}"
 ```
 
 **🎉 Done! Your service principal is ready for authentication.**
@@ -68,9 +68,9 @@ using 'modules/microsoft-graph/servicePrincipals/main.bicep'
 param appId = '12345678-1234-1234-1234-123456789012'
 param accountEnabled = true
 param appRoleAssignmentRequired = true // Require role assignment for access
-param owners = [
-  'user1@contoso.com'   // Primary owner
-  'admin@contoso.com'   // Admin owner
+param ownerIds = [
+  '11111111-1111-1111-1111-111111111111'   // Primary owner object ID
+  '22222222-2222-2222-2222-222222222222'   // Admin owner object ID
 ]
 param tags = [
   'Environment:Production'
@@ -107,7 +107,7 @@ targetScope = 'resourceGroup'
 param environment string
 
 param baseAppId string
-param ownerEmails array = []
+param ownerIds array = []
 
 // Environment-specific configurations
 var environmentConfig = {
@@ -134,12 +134,12 @@ module servicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bicep' =
     appId: baseAppId
     accountEnabled: environmentConfig[environment].accountEnabled
     appRoleAssignmentRequired: environmentConfig[environment].appRoleAssignmentRequired
-    owners: ownerEmails
+    ownerIds: ownerIds
     tags: environmentConfig[environment].tags
   }
 }
 
-output servicePrincipalId string = servicePrincipal.outputs.objectId
+output servicePrincipalId string = servicePrincipal.outputs.servicePrincipalId
 output environment string = environment
 ```
 
@@ -153,11 +153,11 @@ az deployment group create \
   --parameters environment=dev baseAppId=<your-app-id> \
   --name "dev-sp-deployment"
 
-# Production environment  
+# Production environment
 az deployment group create \
   --resource-group "rg-prod" \
   --template-file "multi-env-sp.bicep" \
-  --parameters environment=prod baseAppId=<your-app-id> ownerEmails='["admin@contoso.com"]' \
+  --parameters environment=prod baseAppId=<your-app-id> ownerIds='["11111111-1111-1111-1111-111111111111"]' \
   --name "prod-sp-deployment"
 ```
 
@@ -251,7 +251,7 @@ az ad signed-in-user show --query id -o tsv
 # Get application object ID from app ID
 az ad app list --filter "appId eq '<app-id>'" --query "[0].id" -o tsv
 
-# Get service principal object ID from app ID  
+# Get service principal object ID from app ID
 az ad sp list --filter "appId eq '<app-id>'" --query "[0].id" -o tsv
 ```
 
@@ -261,7 +261,7 @@ az ad sp list --filter "appId eq '<app-id>'" --query "[0].id" -o tsv
 # Microsoft Graph
 00000003-0000-0000-c000-000000000000
 
-# Azure Active Directory Graph  
+# Microsoft Entra ID / Azure AD Graph (legacy)
 00000002-0000-0000-c000-000000000000
 
 # Microsoft 365 Management APIs

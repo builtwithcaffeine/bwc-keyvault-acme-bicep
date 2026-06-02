@@ -1,246 +1,185 @@
 # Azure Key Vault ACME Certificate Management
 
-This repository contains Azure Bicep templates for deploying an automated ACME (Automated Certificate Management Environment) certificate management solution using Azure Key Vault. The solution automates the process of requesting, renewing, and managing SSL/TLS certificates from ACME certificate authorities like Let's Encrypt.
+Production-ready Infrastructure as Code (IaC) for deploying an ACME-based certificate automation platform on Azure using Bicep.
 
-## Overview
+This solution provisions a secure Function App + Key Vault pattern (with private networking and managed identity) and deploys the latest Acmebot package automatically.
 
-This infrastructure-as-code solution deploys the following Azure resources:
+## Status
 
-- **Azure Key Vault** - Secure storage for certificates and secrets
-- **User Managed Identity** - Identity for automated certificate management
-- **Azure Function App** - Automated certificate renewal logic
-- **App Service Plan** - Hosting for the Function App
-- **Storage Account** - Required for Function App runtime
-- **Log Analytics Workspace** - Centralized logging and monitoring
-- **Application Insights** - Application performance monitoring
-- **Virtual Network** (optional) - Network isolation and security
-- **Private DNS Zones** (optional) - Private endpoint DNS resolution
-- **Microsoft Graph Integration** - Application registration for authentication
+✅ **Production ready baseline**
+
+Use `environmentType = 'prod'` and follow the checklist in [Production readiness checklist](#production-readiness-checklist) before go-live.
+
+## What this deploys
+
+- Azure Resource Group
+- User Assigned Managed Identity
+- Azure Key Vault (private endpoint)
+- Azure Storage Account (private endpoints: blob/file/table/queue)
+- Log Analytics Workspace
+- Application Insights (workspace-based)
+- Azure Functions (Linux Flex Consumption, .NET Isolated)
+- Function package deployment via `onedeploy` (Acmebot from GitHub release)
+- Microsoft Entra objects via Microsoft Graph Bicep extension:
+  - Security group
+  - App registration
+  - Federated identity credential
+  - Service principal
+- Optional:
+  - New Virtual Network + subnets
+  - Private DNS zones
+  - DNS role assignments (Public DNS + Private DNS)
+
+## Architecture (high level)
+
+```mermaid
+flowchart LR
+  A[Function App\nAcmebot] -->|Managed Identity| B[Azure Key Vault]
+  A --> C[Storage Account\nPackage + Runtime]
+  A --> D[Azure DNS / Private DNS]
+  A --> E[Application Insights]
+  E --> F[Log Analytics Workspace]
+  G[Microsoft Entra App + SP + FIC] --> A
+```
+
+## Repository layout
+
+```text
+.
+├─ README.md
+├─ infra/
+│  ├─ main.bicep
+│  ├─ param.main.bicepparam
+│  ├─ Invoke-AzDeployment.ps1
+│  ├─ bicepconfig.json
+│  └─ modules/
+│     ├─ app/site/extension/                 # oneDeploy extension module
+│     └─ microsoft-graph/                    # Entra resources via Graph extension
+└─ scripts/
+   └─ Invoke-CertificateRenewal.ps1          # Optional host-side cert install/update helper
+```
 
 ## Prerequisites
 
-Before deploying this solution, ensure you have:
+- Azure subscription with deployment permissions (`Contributor` or higher)
+- Microsoft Entra permissions to create app registrations/service principals (for Graph-backed modules)
+- Azure CLI (current)
+- Bicep CLI (current)
+- PowerShell 7+
 
-- **Azure Subscription** with appropriate permissions
-- **Azure CLI** installed and up-to-date
-- **Bicep CLI** installed and up-to-date
-- **PowerShell** 7.0 or later
-- **Contributor** or **Owner** role on the target subscription
-- **Application Administrator** role in Azure AD (for app registration)
+## Quick start
 
-## Project Structure
+Run from the `infra/` directory.
 
-```
-.
-├── main.bicep                          # Main Bicep template
-├── param.main.bicepparam               # Parameters file
-├── Invoke-AzDeployment.ps1             # Deployment script
-├── bicepconfig.json                    # Bicep configuration
-└── modules/
-    └── microsoft-graph/                # Microsoft Graph integration modules
-        ├── applications/               # App registration deployment
-        ├── servicePrincipals/          # Service principal management
-        ├── federatedIdentityCredentials/ # Federated identity credentials
-        ├── groups/                     # Azure AD group management
-        ├── users/                      # Azure AD user management
-        ├── oauth2PermissionGrants/     # OAuth2 permissions
-        └── appRoleAssignedTo/          # App role assignments
-```
+### 1) Review parameters
 
-## Configuration
+Update `infra/param.main.bicepparam` for your environment.
 
-### Parameters File
+Key parameters to review first:
 
-Edit the `param.main.bicepparam` file to configure your deployment:
+- `customerName`
+- `environmentType` (`dev`, `acc`, `prod`)
+- `location`
+- `sharedResourceGroupName`
+- `enableCreateVirtualNetwork` / `enableCreatePrivateDnsZones`
+- `azurePublicDnsZones` / `azurePrivateDnsZones`
+- `acmeContacts`
+- `acmeEndpoint`
 
-```bicep
-// Core Configuration
-param customerName = 'bwc'              # Customer/organization identifier
-param environmentType = 'dev'           # Environment: dev, acc, or prod
-param location = 'westeurope'           # Azure region
-param locationShortCode = 'weu'         # Location abbreviation
-param deployedBy = ''                   # Deployment identifier
-
-// Azure Network Configuration
-param enableCreateVirtualNetwork = true # Create new virtual network
-param virtualNetworkAddressPrefix = '10.0.0.0/24'
-param virtualNetworkSubnetShared = '10.0.0.0/28'
-param virtualNetworkSubnetAppService = '10.0.0.16/28'
-
-// Key Vault Configuration
-param createWithKeyVault = true         # Create new Key Vault
-param existingKeyVaultResourceGroup = '' # Use existing KV (optional)
-param existingKeyVaultName = ''         # Existing KV name (optional)
-
-// Private DNS Configuration
-param enableCreatePrivateDnsZones = false # Create private DNS zones
-```
-
-### Resource Naming Convention
-
-Resources follow Azure naming best practices:
-
-- Resource Group: `rg-x-{customer}-kvacme-{env}-{location}`
-- Key Vault: `kv-{customer}-kvacme-{env}-{location}`
-- Function App: `func-{customer}-kvacme-{env}-{location}`
-- Storage Account: `st{customer}kvacme{env}{location}`
-- Managed Identity: `id-{customer}-kvacme-{env}-{location}`
-
-## Deployment
-
-### Option 1: Using the PowerShell Script (Recommended)
-
-The repository includes a comprehensive deployment script with validation and error handling:
+### 2) Deploy (recommended script)
 
 ```powershell
-# Deploy to subscription scope
+cd .\infra
+
 .\Invoke-AzDeployment.ps1 `
-    -targetScope sub `
-    -subscriptionId "b67e1026-b589-41e2-b41f-73f8803f71a0" `
-    -customerName bwc `
-    -environmentType dev `
-    -location westeurope `
-    -deploy
+  -targetScope sub `
+  -subscriptionId "<subscription-guid>" `
+  -customerName "bwc" `
+  -environmentType "prod" `
+  -location "westeurope" `
+  -deploy
 ```
 
-#### Script Parameters
-
-- **`-targetScope`** - Deployment scope: `tenant`, `mgmt`, or `sub`
-- **`-subscriptionId`** - Azure subscription ID (36-character GUID)
-- **`-customerName`** - Customer/organization identifier
-- **`-environmentType`** - Environment type: `dev`, `acc`, or `prod`
-- **`-location`** - Azure region for deployment
-- **`-deploy`** - Switch to execute the deployment (without this, it validates only)
-
-### Option 2: Using Azure CLI
+### 3) Alternative direct CLI deployment
 
 ```powershell
-# Login to Azure
+cd .\infra
+
 az login
+az account set --subscription "<subscription-guid>"
 
-# Set subscription
-az account set --subscription "b67e1026-b589-41e2-b41f-73f8803f71a0"
-
-# Deploy using Bicep
 az deployment sub create `
-    --name "kvacme-deployment-$(Get-Date -Format 'yyyyMMdd-HHmmss')" `
-    --location westeurope `
-    --template-file .\main.bicep `
-    --parameters .\param.main.bicepparam
+  --name "kvacme-$(Get-Date -Format 'yyyyMMdd-HHmmss')" `
+  --location westeurope `
+  --template-file .\main.bicep `
+  --parameters .\param.main.bicepparam
 ```
 
-### Option 3: What-If Validation
+## Deployment script behavior
 
-Preview changes before deployment:
+`infra/Invoke-AzDeployment.ps1` performs:
+
+- Azure CLI and Bicep version checks
+- User or service principal authentication
+- Location short-code mapping
+- Deployment GUID generation for tracking
+- `what-if` confirmation flow before apply
+- Subscription/tenant scoped deployment support (`tenant`, `mgmt`, `sub`)
+
+## Production readiness checklist
+
+Before first production rollout:
+
+- [ ] Set `environmentType = 'prod'`
+- [ ] Confirm `customerName` produces globally unique names (especially Key Vault)
+- [ ] Validate VNet/subnet CIDRs do not overlap
+- [ ] Confirm DNS zone IDs and target resource groups are correct
+- [ ] Confirm Entra permissions for Graph-backed modules are in place
+- [ ] Confirm Key Vault access policies and RBAC assignments meet your security model
+- [ ] Validate private endpoint DNS resolution from your runtime network
+- [ ] Validate certificate renewal window (`acmeBotRenewBeforeExpiry`)
+- [ ] Run a test issuance/renewal for at least one hostname
+- [ ] Enable your organization’s operational guardrails (alerts, diagnostics retention, backup/runbook processes)
+
+## Operations and validation
+
+After deployment:
+
+- Confirm Function App is reachable internally through private networking
+- Verify App Insights and Log Analytics ingestion
+- Validate certificates appear in Key Vault and renew on schedule
+- Validate DNS challenge updates succeed for your zone set
+
+Helpful checks:
 
 ```powershell
-az deployment sub what-if `
-    --location westeurope `
-    --template-file .\main.bicep `
-    --parameters .\param.main.bicepparam
+# Latest deployment status (subscription scope)
+az deployment sub list --query "[0].{name:name,state:properties.provisioningState,timestamp:properties.timestamp}" -o table
+
+# Function app settings sanity check
+az functionapp config appsettings list -g <resource-group> -n <function-app-name> -o table
 ```
 
-## Deployment Features
+## Optional host certificate sync script
 
-The `Invoke-AzDeployment.ps1` script includes:
+`scripts/Invoke-CertificateRenewal.ps1` can:
 
-- ✅ Azure CLI and Bicep version validation
-- ✅ Automatic authentication handling
-- ✅ Parameter validation and sanitization
-- ✅ Location short code mapping
-- ✅ Deployment tracking with unique GUIDs
-- ✅ Comprehensive error handling
-- ✅ Support for service principal authentication
-- ✅ What-if preview capability
+- Pull certificates from Key Vault
+- Install/update certificates in local machine store
+- Update IIS HTTPS bindings when present
 
-## Post-Deployment Configuration
-
-After deployment, you'll need to:
-
-1. **Configure ACME Provider**
-   - Set up Let's Encrypt or other ACME CA credentials
-   - Configure ACME account in Key Vault
-
-2. **Configure DNS Validation**
-   - Set up DNS provider credentials
-   - Configure automated DNS challenge handling
-
-3. **Set Function App Settings**
-   - Configure certificate renewal schedules
-   - Set notification endpoints
-   - Configure retry policies
-
-4. **Grant Permissions**
-   - Ensure managed identity has Key Vault certificate permissions
-   - Configure DNS provider API access
-
-## Monitoring and Maintenance
-
-### Log Analytics
-
-Monitor deployments and operations through Log Analytics workspace:
-
-```powershell
-# Query Function App logs
-az monitor log-analytics query `
-    -w <workspace-id> `
-    --analytics-query "FunctionAppLogs | where TimeGenerated > ago(24h)"
-```
-
-### Application Insights
-
-View application metrics and traces in Application Insights for troubleshooting and performance monitoring.
-
-## Security Considerations
-
-- All secrets are stored in Azure Key Vault
-- Managed identities are used for authentication (no stored credentials)
-- Private endpoints can be enabled for network isolation
-- RBAC is enforced at all resource levels
-- Audit logging is enabled by default
+Use this script only where local certificate installation is part of your runtime topology.
 
 ## Troubleshooting
 
-### Common Issues
+- **Permission failures**: verify Azure RBAC + Entra admin roles for Graph resources.
+- **Name conflicts**: Key Vault names are globally unique.
+- **Networking failures**: validate private DNS links and subnet routing.
+- **DNS challenge failures**: verify role assignments and zone IDs for the managed identity.
 
-1. **Deployment fails with permission errors**
-   - Ensure you have Contributor/Owner role on subscription
-   - Verify Application Administrator role in Azure AD
+## References
 
-2. **Key Vault name conflicts**
-   - Key Vault names must be globally unique
-   - Modify `customerName` or `locationShortCode` parameters
-
-3. **Virtual network address conflicts**
-   - Adjust `virtualNetworkAddressPrefix` to avoid conflicts
-   - Ensure subnet ranges don't overlap with existing networks
-
-## Contributing
-
-When contributing to this repository:
-
-1. Follow Azure naming conventions
-2. Test deployments in dev environment first
-3. Update documentation for new features
-4. Include parameter examples in bicepparam files
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For issues and questions:
-
-- Create an issue in the repository
-- Review existing documentation in `modules/` folders
-- Check Azure documentation for service-specific guidance
-
-## Additional Resources
-
-- [Azure Bicep Documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
-- [Azure Key Vault Documentation](https://learn.microsoft.com/azure/key-vault/)
-- [Let's Encrypt Documentation](https://letsencrypt.org/docs/)
-- [ACME Protocol Specification](https://datatracker.ietf.org/doc/html/rfc8555)
-
----
+- [Azure Bicep documentation](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
+- [Azure Key Vault documentation](https://learn.microsoft.com/azure/key-vault/)
+- [ACME RFC 8555](https://datatracker.ietf.org/doc/html/rfc8555)
+- [Acmebot project](https://github.com/polymind-inc/acmebot)

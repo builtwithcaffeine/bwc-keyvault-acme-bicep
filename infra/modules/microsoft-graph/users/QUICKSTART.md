@@ -2,13 +2,13 @@
 
 ## Microsoft Graph Users Module
 
-Get Azure AD user references configured for identity management in **under 2 minutes**!
+Get Microsoft Entra user references configured for identity management in **under 2 minutes**!
 
 ## ⚡ Prerequisites
 
 - Azure CLI 2.50+ or Azure PowerShell 10.0+
-- Azure AD permissions: **User Administrator** or **Global Administrator**
-- Valid user accounts in Azure AD tenant
+- Microsoft Entra permissions: **User Administrator** or **Global Administrator**
+- Valid user accounts in your Microsoft Entra tenant
 
 ```bash
 # Verify prerequisites
@@ -32,8 +32,8 @@ Create `quickstart-user.bicepparam`:
 ```bicep
 using 'modules/microsoft-graph/users/main.bicep'
 
-// Reference existing user by object ID
-param id = '12345678-1234-1234-1234-123456789012' // User object ID from step 1
+// Reference existing user by User Principal Name (UPN)
+param userPrincipalName = 'user@contoso.com'
 ```
 
 ### Step 3: Deploy User Reference
@@ -53,7 +53,7 @@ az deployment group create \
 
 ## 🎯 Option 2: Team User References (1 minute)
 
-### Step 1: Get Team Member IDs
+### Step 1: Get Team Member UPNs
 
 ```bash
 # Get multiple users by email
@@ -68,10 +68,10 @@ Create `team-users.bicepparam`:
 ```bicep
 using 'team-users-template.bicep'
 
-// Team member object IDs (from step 1)
-param teamLeadId = '11111111-1111-1111-1111-111111111111'
-param developerId = '22222222-2222-2222-2222-222222222222'
-param adminId = '33333333-3333-3333-3333-333333333333'
+// Team member UPNs (from step 1)
+param teamLeadUpn = 'teamlead@contoso.com'
+param developerUpn = 'developer@contoso.com'
+param adminUpn = 'admin@contoso.com'
 ```
 
 ### Step 3: Create Team Template
@@ -81,15 +81,15 @@ Create `team-users-template.bicep`:
 ```bicep
 targetScope = 'resourceGroup'
 
-param teamLeadId string
-param developerId string  
-param adminId string
+param teamLeadUpn string
+param developerUpn string
+param adminUpn string
 
 // Team lead user reference
 module teamLead 'modules/microsoft-graph/users/main.bicep' = {
   name: 'user-team-lead'
   params: {
-    id: teamLeadId
+    userPrincipalName: teamLeadUpn
   }
 }
 
@@ -97,7 +97,7 @@ module teamLead 'modules/microsoft-graph/users/main.bicep' = {
 module developer 'modules/microsoft-graph/users/main.bicep' = {
   name: 'user-developer'
   params: {
-    id: developerId
+    userPrincipalName: developerUpn
   }
 }
 
@@ -105,19 +105,19 @@ module developer 'modules/microsoft-graph/users/main.bicep' = {
 module admin 'modules/microsoft-graph/users/main.bicep' = {
   name: 'user-admin'
   params: {
-    id: adminId
+    userPrincipalName: adminUpn
   }
 }
 
 // Output user references for other modules
-output teamLeadObjectId string = teamLead.outputs.id
-output developerObjectId string = developer.outputs.id
-output adminObjectId string = admin.outputs.id
+output teamLeadObjectId string = teamLead.outputs.userId
+output developerObjectId string = developer.outputs.userId
+output adminObjectId string = admin.outputs.userId
 
 output allUserIds array = [
-  teamLead.outputs.id
-  developer.outputs.id
-  admin.outputs.id
+  teamLead.outputs.userId
+  developer.outputs.userId
+  admin.outputs.userId
 ]
 ```
 
@@ -154,7 +154,7 @@ param environment string = 'production'
 module userReferences 'modules/microsoft-graph/users/main.bicep' = [for (email, i) in userEmails: {
   name: 'user-ref-${i}'
   params: {
-    id: email // Can use email or object ID
+    userPrincipalName: email
   }
 }]
 
@@ -163,17 +163,18 @@ module securityGroup 'modules/microsoft-graph/groups/main.bicep' = {
   name: 'enterprise-security-group'
   params: {
     displayName: 'Enterprise Users - ${environment}'
+    groupName: 'enterprise-users-${toLower(environment)}'
     mailNickname: 'enterprise-users-${toLower(environment)}'
-    description: 'Security group for enterprise user access'
+    groupDescription: 'Security group for enterprise user access'
     groupTypes: []
     mailEnabled: false
     securityEnabled: true
-    members: [for i in range(0, length(userEmails)): userReferences[i].outputs.id]
+    memberIds: [for i in range(0, length(userEmails)): userReferences[i].outputs.userId]
   }
 }
 
-output userObjectIds array = [for i in range(0, length(userEmails)): userReferences[i].outputs.id]
-output securityGroupId string = securityGroup.outputs.id
+output userObjectIds array = [for i in range(0, length(userEmails)): userReferences[i].outputs.userId]
+output securityGroupId string = securityGroup.outputs.groupId
 ```
 
 ### Step 2: Deploy Enterprise Setup
@@ -284,7 +285,7 @@ echo "12345678-1234-1234-1234-123456789012" | grep -E '^[0-9a-f]{8}-[0-9a-f]{4}-
 ### User Identifier Types
 
 | Type | Format | Example | Use Case |
-|------|--------|---------|----------|
+| ------ | -------- | --------- | ---------- |
 | Object ID | GUID | `12345678-1234-1234-1234-123456789012` | Bicep modules, stable reference |
 | User Principal Name | Email | `user@contoso.com` | CLI commands, user lookup |
 | Display Name | String | `John Doe` | Search and identification |

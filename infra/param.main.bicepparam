@@ -5,24 +5,17 @@ param customerName = 'bwc'
 param environmentType = 'dev'
 param location = 'westeurope'
 param locationShortCode = 'weu'
-param deployedBy = ''
+param deployedBy = 'labadmin@builtwithcaffeine.cloud'
 
 //
 // Azure Existing Resource
 param sharedResourceGroupName = 'rg-builtwithcaffeine-hub-weu'
 
-//
-// Azure Key Vault
-param createWithKeyVault = true
-param existingKeyVaultResourceGroup = ''
-param existingKeyVaultName = ''
-
-// Azure Network - Private Dns Zones
-param enableCreatePrivateDnsZones = false
+// Azure Network
+param enableCreatePrivateDnsZones = true
 
 // Azure Network - New Virtual Network
-param enableCreateVirtualNetwork = false
-param virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+param enableCreateVirtualNetwork = true
 param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
 param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
 param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
@@ -30,8 +23,8 @@ param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
 // Azure Network - Existing Virtual Network
 param existingVirtualNetworkResourceGroup = 'rg-builtwithcaffeine-hub-weu'
 param existingVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
-param existingVirtualNetworkSubnetSharedName = 'snet-shared-resource'
-param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice'
+param existingVirtualNetworkSubnetSharedName = 'snet-shared-hub-prod-weu'
+param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice-hub-prod-weu'
 
 //
 // Azure DNS Zones
@@ -59,18 +52,14 @@ param acmeAzurePublicDnsSubscriptionId = subscriptionId
 //@description('ACME Azure Private DNS Subscription ID')
 param acmeAzurePrivateDnsSubscriptionId = subscriptionId
 
+//@description('ACME Bot Renew Before Expiry')
+param acmeBotRenewBeforeExpiry = 30
+
 //@description('ACME Endpoint')
 param acmeEndpoint = 'https://acme-v02.api.letsencrypt.org/directory'
 
 //@description('Azure Environment')
 param acmeEnvironment = 'AzureCloud'
 
-//@description('ACME Key Vault URL Base')
-var acmeKeyVaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
-param acmeKeyVaultUrlBase = 'https://${acmeKeyVaultName}.vault.azure.net/'
-
 //@description('ACME Contacts Email Address')
 param acmeContacts = 'alerts@builtwithcaffeine.cloud'
-
-//@description('Key Vault ACME Package URL')
-param acmeKvACMEPackage = 'https://stacmebotprod.blob.core.windows.net/keyvault-acmebot/v5/latest.zip'

@@ -1,16 +1,16 @@
 /*
   Test deployment for Microsoft Graph Users Module
-  
+
   This file demonstrates comprehensive usage patterns for user references
   including individual users, team assignments, department structures,
   role-based access control, and integration with other modules.
-  
+
   Prerequisites:
   - Microsoft Graph Bicep extension v1.0 installed
   - Appropriate Azure AD permissions (User.Read.All or Directory.Read.All)
   - Valid User Principal Names that exist in your Azure AD tenant
   - Test users should be replaced with actual users from your environment
-  
+
   Usage:
   az deployment group create \
     --resource-group myResourceGroup \
@@ -91,17 +91,6 @@ param applicationAdmins array = [
 
 var deploymentPrefix = '${organizationName}-${environment}'
 
-// Combine all users for summary reporting
-var allUsers = concat(
-  [ceoUserPrincipalName, ctoUserPrincipalName, itAdminUserPrincipalName, projectManagerUserPrincipalName],
-  developmentTeam,
-  salesTeam,
-  hrTeam,
-  externalPartners,
-  globalAdmins,
-  applicationAdmins
-)
-
 // ========== SCENARIO 1: EXECUTIVE LEADERSHIP ==========
 
 // Scenario 1.1: CEO User Reference
@@ -141,69 +130,81 @@ module projectManagerUser '../main.bicep' = {
 // ========== SCENARIO 3: DEVELOPMENT TEAM ==========
 
 // Reference all development team members
-module developmentTeamUsers '../main.bicep' = [for (developer, index) in developmentTeam: {
-  name: '${deploymentPrefix}-dev-${index}'
-  params: {
-    userPrincipalName: developer
+module developmentTeamUsers '../main.bicep' = [
+  for (developer, index) in developmentTeam: {
+    name: '${deploymentPrefix}-dev-${index}'
+    params: {
+      userPrincipalName: developer
+    }
   }
-}]
+]
 
 // ========== SCENARIO 4: SALES TEAM ==========
 
 // Reference all sales team members
-module salesTeamUsers '../main.bicep' = [for (salesperson, index) in salesTeam: {
-  name: '${deploymentPrefix}-sales-${index}'
-  params: {
-    userPrincipalName: salesperson
+module salesTeamUsers '../main.bicep' = [
+  for (salesperson, index) in salesTeam: {
+    name: '${deploymentPrefix}-sales-${index}'
+    params: {
+      userPrincipalName: salesperson
+    }
   }
-}]
+]
 
 // ========== SCENARIO 5: HR TEAM ==========
 
 // Reference all HR team members
-module hrTeamUsers '../main.bicep' = [for (hrMember, index) in hrTeam: {
-  name: '${deploymentPrefix}-hr-${index}'
-  params: {
-    userPrincipalName: hrMember
+module hrTeamUsers '../main.bicep' = [
+  for (hrMember, index) in hrTeam: {
+    name: '${deploymentPrefix}-hr-${index}'
+    params: {
+      userPrincipalName: hrMember
+    }
   }
-}]
+]
 
 // ========== SCENARIO 6: EXTERNAL PARTNERS ==========
 
 // Reference external partner users (guest users)
-module externalPartnerUsers '../main.bicep' = [for (partner, index) in externalPartners: {
-  name: '${deploymentPrefix}-partner-${index}'
-  params: {
-    userPrincipalName: partner
+module externalPartnerUsers '../main.bicep' = [
+  for (partner, index) in externalPartners: {
+    name: '${deploymentPrefix}-partner-${index}'
+    params: {
+      userPrincipalName: partner
+    }
   }
-}]
+]
 
 // ========== SCENARIO 7: GLOBAL ADMINISTRATORS ==========
 
 // Reference Global Administrator users
-module globalAdminUsers '../main.bicep' = [for (admin, index) in globalAdmins: {
-  name: '${deploymentPrefix}-global-admin-${index}'
-  params: {
-    userPrincipalName: admin
+module globalAdminUsers '../main.bicep' = [
+  for (admin, index) in globalAdmins: {
+    name: '${deploymentPrefix}-global-admin-${index}'
+    params: {
+      userPrincipalName: admin
+    }
   }
-}]
+]
 
 // ========== SCENARIO 8: APPLICATION ADMINISTRATORS ==========
 
 // Reference Application Administrator users
-module applicationAdminUsers '../main.bicep' = [for (admin, index) in applicationAdmins: {
-  name: '${deploymentPrefix}-app-admin-${index}'
-  params: {
-    userPrincipalName: admin
+module applicationAdminUsers '../main.bicep' = [
+  for (admin, index) in applicationAdmins: {
+    name: '${deploymentPrefix}-app-admin-${index}'
+    params: {
+      userPrincipalName: admin
+    }
   }
-}]
+]
 
 // ========== SCENARIO 9: BATCH USER PROCESSING ==========
 
 // Process all unique users from the combined list
 var uniqueUsers = union(
   [ceoUserPrincipalName],
-  [ctoUserPrincipalName], 
+  [ctoUserPrincipalName],
   [itAdminUserPrincipalName],
   [projectManagerUserPrincipalName],
   developmentTeam,
@@ -215,22 +216,26 @@ var uniqueUsers = union(
 )
 
 // Reference a subset of users for batch processing demonstration
-module batchUserProcessing '../main.bicep' = [for (user, index) in take(uniqueUsers, 5): {
-  name: '${deploymentPrefix}-batch-${index}'
-  params: {
-    userPrincipalName: user
+module batchUserProcessing '../main.bicep' = [
+  for (user, index) in take(uniqueUsers, 5): {
+    name: '${deploymentPrefix}-batch-${index}'
+    params: {
+      userPrincipalName: user
+    }
   }
-}]
+]
 
 // ========== SCENARIO 10: CONDITIONAL USER REFERENCES ==========
 
 // Conditionally reference users based on environment
-module productionOnlyUsers '../main.bicep' = [for admin in globalAdmins: if (environment == 'production') {
-  name: '${deploymentPrefix}-prod-admin-${replace(admin, '@', '-at-')}'
-  params: {
-    userPrincipalName: admin
+module productionOnlyUsers '../main.bicep' = [
+  for admin in globalAdmins: if (environment == 'production') {
+    name: '${deploymentPrefix}-prod-admin-${replace(admin, '@', '-at-')}'
+    params: {
+      userPrincipalName: admin
+    }
   }
-}]
+]
 
 // ========== OUTPUTS ==========
 
@@ -290,75 +295,89 @@ output projectManagerUser object = {
 
 // Team Collections Outputs
 @description('Development Team Users Information')
-output developmentTeamUsers array = [for (developer, index) in developmentTeam: {
-  resourceId: developmentTeamUsers[index].outputs.resourceId
-  userId: developmentTeamUsers[index].outputs.userId
-  userPrincipalName: developmentTeamUsers[index].outputs.userPrincipalName
-  displayName: developmentTeamUsers[index].outputs.displayName
-  mail: developmentTeamUsers[index].outputs.mail
-  jobTitle: developmentTeamUsers[index].outputs.jobTitle
-}]
+output developmentTeamUsers array = [
+  for (developer, index) in developmentTeam: {
+    resourceId: developmentTeamUsers[index].outputs.resourceId
+    userId: developmentTeamUsers[index].outputs.userId
+    userPrincipalName: developmentTeamUsers[index].outputs.userPrincipalName
+    displayName: developmentTeamUsers[index].outputs.displayName
+    mail: developmentTeamUsers[index].outputs.mail
+    jobTitle: developmentTeamUsers[index].outputs.jobTitle
+  }
+]
 
 @description('Sales Team Users Information')
-output salesTeamUsers array = [for (salesperson, index) in salesTeam: {
-  resourceId: salesTeamUsers[index].outputs.resourceId
-  userId: salesTeamUsers[index].outputs.userId
-  userPrincipalName: salesTeamUsers[index].outputs.userPrincipalName
-  displayName: salesTeamUsers[index].outputs.displayName
-  mail: salesTeamUsers[index].outputs.mail
-  jobTitle: salesTeamUsers[index].outputs.jobTitle
-}]
+output salesTeamUsers array = [
+  for (salesperson, index) in salesTeam: {
+    resourceId: salesTeamUsers[index].outputs.resourceId
+    userId: salesTeamUsers[index].outputs.userId
+    userPrincipalName: salesTeamUsers[index].outputs.userPrincipalName
+    displayName: salesTeamUsers[index].outputs.displayName
+    mail: salesTeamUsers[index].outputs.mail
+    jobTitle: salesTeamUsers[index].outputs.jobTitle
+  }
+]
 
 @description('HR Team Users Information')
-output hrTeamUsers array = [for (hrMember, index) in hrTeam: {
-  resourceId: hrTeamUsers[index].outputs.resourceId
-  userId: hrTeamUsers[index].outputs.userId
-  userPrincipalName: hrTeamUsers[index].outputs.userPrincipalName
-  displayName: hrTeamUsers[index].outputs.displayName
-  mail: hrTeamUsers[index].outputs.mail
-  jobTitle: hrTeamUsers[index].outputs.jobTitle
-}]
+output hrTeamUsers array = [
+  for (hrMember, index) in hrTeam: {
+    resourceId: hrTeamUsers[index].outputs.resourceId
+    userId: hrTeamUsers[index].outputs.userId
+    userPrincipalName: hrTeamUsers[index].outputs.userPrincipalName
+    displayName: hrTeamUsers[index].outputs.displayName
+    mail: hrTeamUsers[index].outputs.mail
+    jobTitle: hrTeamUsers[index].outputs.jobTitle
+  }
+]
 
 // External Partners Output
 @description('External Partner Users Information')
-output externalPartnerUsers array = [for (partner, index) in externalPartners: {
-  resourceId: externalPartnerUsers[index].outputs.resourceId
-  userId: externalPartnerUsers[index].outputs.userId
-  userPrincipalName: externalPartnerUsers[index].outputs.userPrincipalName
-  displayName: externalPartnerUsers[index].outputs.displayName
-  mail: externalPartnerUsers[index].outputs.mail
-}]
+output externalPartnerUsers array = [
+  for (partner, index) in externalPartners: {
+    resourceId: externalPartnerUsers[index].outputs.resourceId
+    userId: externalPartnerUsers[index].outputs.userId
+    userPrincipalName: externalPartnerUsers[index].outputs.userPrincipalName
+    displayName: externalPartnerUsers[index].outputs.displayName
+    mail: externalPartnerUsers[index].outputs.mail
+  }
+]
 
 // Administrative Role Outputs
 @description('Global Administrator Users Information')
-output globalAdminUsers array = [for (admin, index) in globalAdmins: {
-  resourceId: globalAdminUsers[index].outputs.resourceId
-  userId: globalAdminUsers[index].outputs.userId
-  userPrincipalName: globalAdminUsers[index].outputs.userPrincipalName
-  displayName: globalAdminUsers[index].outputs.displayName
-  mail: globalAdminUsers[index].outputs.mail
-  jobTitle: globalAdminUsers[index].outputs.jobTitle
-}]
+output globalAdminUsers array = [
+  for (admin, index) in globalAdmins: {
+    resourceId: globalAdminUsers[index].outputs.resourceId
+    userId: globalAdminUsers[index].outputs.userId
+    userPrincipalName: globalAdminUsers[index].outputs.userPrincipalName
+    displayName: globalAdminUsers[index].outputs.displayName
+    mail: globalAdminUsers[index].outputs.mail
+    jobTitle: globalAdminUsers[index].outputs.jobTitle
+  }
+]
 
 @description('Application Administrator Users Information')
-output applicationAdminUsers array = [for (admin, index) in applicationAdmins: {
-  resourceId: applicationAdminUsers[index].outputs.resourceId
-  userId: applicationAdminUsers[index].outputs.userId
-  userPrincipalName: applicationAdminUsers[index].outputs.userPrincipalName
-  displayName: applicationAdminUsers[index].outputs.displayName
-  mail: applicationAdminUsers[index].outputs.mail
-  jobTitle: applicationAdminUsers[index].outputs.jobTitle
-}]
+output applicationAdminUsers array = [
+  for (admin, index) in applicationAdmins: {
+    resourceId: applicationAdminUsers[index].outputs.resourceId
+    userId: applicationAdminUsers[index].outputs.userId
+    userPrincipalName: applicationAdminUsers[index].outputs.userPrincipalName
+    displayName: applicationAdminUsers[index].outputs.displayName
+    mail: applicationAdminUsers[index].outputs.mail
+    jobTitle: applicationAdminUsers[index].outputs.jobTitle
+  }
+]
 
 // Batch Processing Output
 @description('Batch Processed Users Information (subset for demonstration)')
-output batchProcessedUsers array = [for (user, index) in take(uniqueUsers, 5): {
-  resourceId: batchUserProcessing[index].outputs.resourceId
-  userId: batchUserProcessing[index].outputs.userId
-  userPrincipalName: batchUserProcessing[index].outputs.userPrincipalName
-  displayName: batchUserProcessing[index].outputs.displayName
-  mail: batchUserProcessing[index].outputs.mail
-}]
+output batchProcessedUsers array = [
+  for (user, index) in take(uniqueUsers, 5): {
+    resourceId: batchUserProcessing[index].outputs.resourceId
+    userId: batchUserProcessing[index].outputs.userId
+    userPrincipalName: batchUserProcessing[index].outputs.userPrincipalName
+    displayName: batchUserProcessing[index].outputs.displayName
+    mail: batchUserProcessing[index].outputs.mail
+  }
+]
 
 // Summary Statistics
 @description('User deployment summary and statistics')

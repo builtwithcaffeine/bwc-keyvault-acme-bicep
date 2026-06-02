@@ -2,19 +2,16 @@
 
 ## Microsoft Graph Applications Module
 
-Get up and running with Azure AD application management in **under 5 minutes**!
+Get up and running with Microsoft Entra application management in **under 5 minutes**!
 
 ## ⚡ Prerequisites
 
 - Azure CLI 2.50+ or Azure PowerShell 10.0+
-- Azure AD permissions: **Application Administrator** or **Global Administrator**
-- Microsoft Graph Bicep extension installed
+- Microsoft Entra permissions: **Application Administrator** or **Global Administrator**
+- Microsoft Graph Bicep extension alias configured in `bicepconfig.json`
 
 ```bash
-# Install Azure CLI extension
-az extension add --name bicep
-
-# Verify Microsoft Graph Bicep support
+# Verify Bicep CLI is available
 az bicep version
 ```
 
@@ -29,7 +26,7 @@ using 'modules/microsoft-graph/applications/main.bicep'
 
 // Basic enterprise application
 param displayName = 'QuickStart-MyApp'
-param uniqueName = 'quickstart-myapp'
+param appName = 'quickstart-myapp'
 param webRedirectUris = ['https://myapp.contoso.com/auth/callback']
 param requiredResourceAccess = [
   {
@@ -81,7 +78,7 @@ using 'modules/microsoft-graph/applications/main.bicep'
 
 // API application with app roles
 param displayName = 'QuickStart-API'
-param uniqueName = 'quickstart-api'
+param appName = 'quickstart-api'
 param identifierUris = ['api://quickstart-api']
 param appRoles = [
   {
@@ -93,7 +90,7 @@ param appRoles = [
     isEnabled: true
   }
   {
-    id: 'b2c3d4e5-f6g7-8901-2345-678901bcdefg'
+    id: 'b2c3d4e5-f6a7-8901-2345-678901bcdef0'
     allowedMemberTypes: ['User']
     description: 'Administrator access to application'
     displayName: 'Administrator'
@@ -103,7 +100,7 @@ param appRoles = [
 ]
 param oauth2PermissionScopes = [
   {
-    id: 'c3d4e5f6-g7h8-9012-3456-789012cdefgh'
+    id: 'c3d4e5f6-a7b8-9012-3456-789012cdef01'
     adminConsentDescription: 'Access user data'
     adminConsentDisplayName: 'Access user data'
     userConsentDescription: 'Allow access to your data'
@@ -116,7 +113,7 @@ param oauth2PermissionScopes = [
 param tags = ['Type:API', 'Environment:Production']
 ```
 
-### Step 2: Deploy
+### Step 2: Deploy API application
 
 ```bash
 az deployment group create \
@@ -141,7 +138,7 @@ using 'modules/microsoft-graph/applications/main.bicep'
 
 // Enterprise application with full configuration
 param displayName = 'Enterprise-QuickStart'
-param uniqueName = 'enterprise-quickstart'
+param appName = 'enterprise-quickstart'
 param webRedirectUris = [
   'https://quickstart.contoso.com/auth/callback'
   'https://staging-quickstart.contoso.com/auth/callback'
@@ -179,7 +176,7 @@ param appRoles = [
     isEnabled: true
   }
   {
-    id: 'b2c3d4e5-f6g7-8901-2345-678901bcdefg'
+    id: 'b2c3d4e5-f6a7-8901-2345-678901bcdef0'
     allowedMemberTypes: ['User']
     description: 'Read-only access to data'
     displayName: 'Reader'
@@ -191,7 +188,7 @@ param appRoles = [
 // Custom OAuth2 permissions
 param oauth2PermissionScopes = [
   {
-    id: 'c3d4e5f6-g7h8-9012-3456-789012cdefgh'
+    id: 'c3d4e5f6-a7b8-9012-3456-789012cdef01'
     adminConsentDescription: 'Read user profile data'
     adminConsentDisplayName: 'Read user profiles'
     userConsentDescription: 'Read your profile data'
@@ -241,6 +238,7 @@ echo "🔗 Check your application at: https://portal.azure.com/#view/Microsoft_A
 ## 🛠️ Common Commands
 
 ### Get Application Information
+
 ```bash
 # List all applications
 az ad app list --query "[].{displayName:displayName,appId:appId}" --output table
@@ -250,6 +248,7 @@ az ad app show --id <app-id> --query "{displayName:displayName,appId:appId,objec
 ```
 
 ### Update Application
+
 ```bash
 # Update redirect URIs
 az ad app update --id <app-id> --web-redirect-uris "https://newuri.com/callback"
@@ -259,6 +258,7 @@ az ad app update --id <app-id> --identifier-uris "api://myapp"
 ```
 
 ### Delete Application (Cleanup)
+
 ```bash
 # Delete application
 az ad app delete --id <app-id>
@@ -267,6 +267,7 @@ az ad app delete --id <app-id>
 ## 🔍 Troubleshooting
 
 ### Issue: Permission Denied
+
 ```bash
 # Check your permissions
 az ad signed-in-user show --query "{displayName:displayName,userPrincipalName:userPrincipalName}"
@@ -278,21 +279,23 @@ az role assignment list --assignee <your-object-id> --query "[].roleDefinitionNa
 **Solution**: Ensure you have **Application Administrator** or **Global Administrator** role.
 
 ### Issue: Duplicate Application Name
+
 **Error**: `Another object with the same value for property displayName already exists`
 
-**Solution**: Use a unique `displayName` and `uniqueName` in your parameters.
+**Solution**: Use a unique `displayName` and `appName` in your parameters.
 
 ### Issue: Invalid Redirect URI
+
 **Error**: `The reply URL specified in the request does not match`
 
-**Solution**: Ensure redirect URIs use HTTPS and follow [Azure AD URI requirements](https://docs.microsoft.com/en-us/azure/active-directory/develop/reply-url).
+**Solution**: Ensure redirect URIs use HTTPS and follow [Microsoft Entra redirect URI requirements](https://learn.microsoft.com/azure/active-directory/develop/reply-url).
 
 ## 🔗 Next Steps
 
 - 📖 **[Full Documentation](README.md)** - Complete module reference
-- 🧪 **[Test Examples](test/main.test.bicep)** - Advanced usage scenarios  
+- 🧪 **[Test Examples](test/main.test.bicep)** - Advanced usage scenarios
 - 🏗️ **[Service Principals](../servicePrincipals/QUICKSTART.md)** - Create service principals
-- 🔐 **[Federated Identity](applications/federatedIdentityCredentials/QUICKSTART.md)** - OIDC authentication
+- 🔐 **[Federated Identity](./federatedIdentityCredentials/QUICKSTART.md)** - OIDC authentication
 
 ## 💡 Pro Tips
 
@@ -304,4 +307,4 @@ az role assignment list --assignee <your-object-id> --query "[].roleDefinitionNa
 
 ---
 
-**⚡ You're ready to build enterprise Azure AD applications!** 🚀
+**⚡ You're ready to build enterprise Microsoft Entra applications!** 🚀

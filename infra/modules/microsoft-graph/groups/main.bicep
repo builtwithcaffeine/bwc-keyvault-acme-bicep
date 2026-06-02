@@ -73,16 +73,20 @@ param memberIds array = []
 // ========== VARIABLES ==========
 
 // Configure owners relationship if provided
-var ownersConfig = !empty(ownerIds) ? {
-  relationships: ownerIds
-  relationshipSemantics: 'append'
-} : null
+var ownersConfig = !empty(ownerIds)
+  ? {
+      relationships: ownerIds
+      relationshipSemantics: 'append'
+    }
+  : null
 
 // Configure members relationship if provided
-var membersConfig = !empty(memberIds) ? {
-  relationships: memberIds
-  relationshipSemantics: 'append'
-} : null
+var membersConfig = !empty(memberIds)
+  ? {
+      relationships: memberIds
+      relationshipSemantics: 'append'
+    }
+  : null
 
 // ========== RESOURCES ==========
 
@@ -96,10 +100,10 @@ resource group 'Microsoft.Graph/groups@v1.0' = {
   mailNickname: mailNickname
   mailEnabled: mailEnabled
   securityEnabled: securityEnabled
-  groupTypes: !empty(groupTypes) ? groupTypes : []
-  isAssignableToRole: isAssignableToRole
+  groupTypes: !empty(groupTypes) ? groupTypes : null
+  isAssignableToRole: isAssignableToRole ? isAssignableToRole : null
   //isManagementRestricted: isManagementRestricted
-  visibility: visibility
+  visibility: contains(groupTypes, 'Unified') ? visibility : null
   classification: !empty(classification) ? classification : null
   preferredLanguage: !empty(preferredLanguage) ? preferredLanguage : null
   preferredDataLocation: !empty(preferredDataLocation) ? preferredDataLocation : null

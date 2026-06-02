@@ -7,7 +7,7 @@ Grant OAuth2 permissions for secure API access in **under 3 minutes**!
 ## ⚡ Prerequisites
 
 - Azure CLI 2.50+ or Azure PowerShell 10.0+
-- Azure AD permissions: **Application Administrator** or **Global Administrator**
+- Microsoft Entra permissions: **Application Administrator** or **Global Administrator**
 - Existing service principal and resource API
 - Understanding of OAuth2 permission scopes
 
@@ -108,7 +108,7 @@ module microsoftGraphPermissions 'modules/microsoft-graph/oauth2PermissionGrants
   name: 'msgraph-permissions-${environment}'
   params: {
     clientId: clientServicePrincipalId
-    resourceId: '00000003-0000-0000-c000-000000000000' // Microsoft Graph App ID
+    resourceId: '11111111-1111-1111-1111-111111111111' // Microsoft Graph service principal object ID
     scope: 'User.Read Directory.Read.All Group.Read.All'
     consentType: 'AllPrincipals'
   }
@@ -119,7 +119,7 @@ module aadGraphPermissions 'modules/microsoft-graph/oauth2PermissionGrants/main.
   name: 'aadgraph-permissions-${environment}'
   params: {
     clientId: clientServicePrincipalId
-    resourceId: '00000002-0000-0000-c000-000000000000' // AAD Graph App ID
+    resourceId: '22222222-2222-2222-2222-222222222222' // AAD Graph service principal object ID
     scope: 'User.Read Directory.Read.All'
     consentType: 'AllPrincipals'
   }
@@ -130,15 +130,15 @@ module sharePointPermissions 'modules/microsoft-graph/oauth2PermissionGrants/mai
   name: 'sharepoint-permissions-${environment}'
   params: {
     clientId: clientServicePrincipalId
-    resourceId: '00000003-0000-0ff1-ce00-000000000000' // SharePoint Online App ID
+    resourceId: '33333333-3333-3333-3333-333333333333' // SharePoint Online service principal object ID
     scope: 'Sites.Read.All Web.Read'
     consentType: 'AllPrincipals'
   }
 }
 
-output microsoftGraphGrantId string = microsoftGraphPermissions.outputs.id
-output aadGraphGrantId string = aadGraphPermissions.outputs.id
-output sharePointGrantId string = sharePointPermissions.outputs.id
+output microsoftGraphGrantId string = microsoftGraphPermissions.outputs.oauth2PermissionGrantId
+output aadGraphGrantId string = aadGraphPermissions.outputs.oauth2PermissionGrantId
+output sharePointGrantId string = sharePointPermissions.outputs.oauth2PermissionGrantId
 ```
 
 ### Step 2: Deploy Multi-API Permissions
@@ -260,9 +260,9 @@ az ad sp list --filter "startswith(displayName, 'Microsoft')" \
 ### Common Microsoft APIs
 
 | Service | App ID | Common Scopes |
-|---------|--------|---------------|
+| --------- | -------- | --------------- |
 | Microsoft Graph | `00000003-0000-0000-c000-000000000000` | `User.Read`, `Directory.Read.All`, `Group.Read.All` |
-| Azure AD Graph | `00000002-0000-0000-c000-000000000000` | `User.Read`, `Directory.Read.All` |
+| Microsoft Entra ID / Azure AD Graph (legacy) | `00000002-0000-0000-c000-000000000000` | `User.Read`, `Directory.Read.All` |
 | SharePoint Online | `00000003-0000-0ff1-ce00-000000000000` | `Sites.Read.All`, `Web.Read` |
 | Exchange Online | `00000002-0000-0ff1-ce00-000000000000` | `Mail.Read`, `Calendars.Read` |
 
@@ -272,7 +272,7 @@ az ad sp list --filter "startswith(displayName, 'Microsoft')" \
 # Read permissions
 User.Read, Directory.Read.All, Group.Read.All
 
-# Write permissions  
+# Write permissions
 User.ReadWrite, Directory.ReadWrite.All, Group.ReadWrite.All
 
 # Administrative permissions

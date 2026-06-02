@@ -1,180 +1,271 @@
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $KeyVaultName = 'kv-builtwithcaffeine-dev-weu',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateRange(1, 365)]
+    [int] $RenewalThresholdDays = 7,
+
+    [Parameter(Mandatory = $false)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string] $SubscriptionId,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $LogDirectory = 'C:\Log',
+
+    [Parameter(Mandatory = $false)]
+    [switch] $AllowInteractiveLoginFallback,
+
+    [Parameter(Mandatory = $false)]
+    [switch] $InstallMissingModules,
+
+    [Parameter(Mandatory = $false)]
+    [bool] $FailIfNoCertificates = $true
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
 # Script Variables
-$keyVaultName = 'kv-builtwithcaffeine-dev-weu'
-$certificateNames = (
-    '<certificate>.builtwithcaffeine.cloud',
+$certificateNames = @(
+    '<certificate>.builtwithcaffeine.cloud'
 )
 
-#
-# Script Logging
-#
+function Install-RequiredModule {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string] $Name
+    )
 
-$dateTimeStamp = Get-Date -format 'yyyy-mm-dd-HH-mm-ss'
-$logPath = "C:\Log\$($dateTimeStamp)_certRenewal.txt"
-
-If (!(Test-Path -Path $($logPath | Split-Path -Parent))) {
-    New-Item -ItemType 'Directory' -Path $($logPath | Split-Path -Parent) | Out-Null
-}
-
-Start-Transcript -Path $logPath
-
-Write-Output "-------------------------------------------"
-Write-Output "  Key Vault ACME :: Certificate Installer  "
-Write-Output "-------------------------------------------"
-
-#
-# Configure PowerShell
-#
-
-Write-Output "--> Checking PSGallery and NuGet Packages"
-
-$installationPolicyState = (Get-PSRepository -Name 'PSGallery').InstallationPolicy
-if ($installationPolicyState -ne 'Trusted') {
-    # Install Latest NuGet Package Provider
-    Write-Output "Installing Latest NuGet Package Release"
-    Install-PackageProvider -Name NuGet -Force | Out-Null
-
-    # Update PSGallery InstallationPolicy State
-    Write-Output "Updating PSGallery InstallationPolicy [Trusted]"
-    Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
-}
-else {
-    Write-Output "PSGallery 'Trusted', NuGet PackageProvider Ok!" `r
-}
-
-#
-# Install Azure PowerShell Required Modules
-#
-
-Write-Output "--> Checking PowerShell Modules" `r
-
-$azModules = @(
-    'Az.Accounts',
-    'Az.Resources',
-    'Az.Keyvault'
-)
-
-foreach ($moduleName in $azModules) {
-    Write-Output "Checking for $moduleName"
-    $module = Get-Module -ListAvailable $moduleName
+    $module = Get-Module -ListAvailable -Name $Name
     if (-not $module) {
-        Write-Warning "$moduleName missing, Installing now!"
-        Install-Module -Name $moduleName -Force
+        if (-not $InstallMissingModules) {
+            throw "Required module [$Name] is not installed. Install it ahead of schedule run, or re-run with -InstallMissingModules."
+        }
+
+        Write-Warning "$Name missing, installing to CurrentUser scope..."
+        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -Confirm:$false
     }
     else {
-        Write-Output "Module: $($module.name), Version: $($module.version)" `r
+        $latest = $module | Sort-Object Version -Descending | Select-Object -First 1
+        Write-Output "Module: $($latest.Name), Version: $($latest.Version)"
     }
 }
 
-#
-# Connect to Azure Environment
-#
-
-Write-Output "--> Authenticating to Azure (System Assigned Identity)"
-$status = Connect-AzAccount -Identity
-Write-Output "Welcome to $($status.Context.Subscription.Name)!" `r
-
-Write-Output "--> Checking Certificates in Key Vault [$keyVaultName]"
-$certDataList = @()
-
-foreach ($certificate in $certificateNames) {
+function Connect-AzContext {
+    Write-Output "--> Authenticating to Azure (Managed Identity)"
     try {
-        $certRequest = Get-AzKeyVaultCertificate -VaultName $keyVaultName -Name $certificate.Replace('.', '-')
-        $certDataList += [PSCustomObject]@{
-            Name       = $certRequest.Name
-            CreatedOn  = $certRequest.Created.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-            ExpiresOn  = $certRequest.Expires.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-            Thumbprint = $certRequest.Thumbprint
+        $status = Connect-AzAccount -Identity
+        if ($SubscriptionId) {
+            Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
         }
+        Write-Output "Welcome to $($status.Context.Subscription.Name)!"
+        return
     }
     catch {
-        Write-Warning "Error retrieving certificate $($certificate): $_"
+        if (-not $AllowInteractiveLoginFallback) {
+            throw "Managed Identity authentication failed. Re-run with -AllowInteractiveLoginFallback to use interactive login. Error: $($_.Exception.Message)"
+        }
+
+        Write-Warning "Managed Identity authentication failed, falling back to interactive login..."
+        $status = Connect-AzAccount
+        if ($SubscriptionId) {
+            Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
+        }
+        Write-Output "Welcome to $($status.Context.Subscription.Name)!"
     }
 }
 
-# Output the entire list as a clean table
-$certDataList | Format-Table -AutoSize
+# Script Logging
+$dateTimeStamp = Get-Date -Format 'yyyy-MM-dd-HH-mm-ss'
+$logPath = Join-Path -Path $LogDirectory -ChildPath "${dateTimeStamp}_certRenewal.txt"
+$transcriptStarted = $false
+$hasProcessingErrors = $false
 
-Write-Output "--> Download Certificates in Key Vault [$keyVaultName]"
-foreach ($certificate in $certDataList) {
-    $pfxSecret = Get-AzKeyVaultSecret -VaultName $keyVaultName -Name $certificate.Name -AsPlainText
-    $pfxBytes = [Convert]::FromBase64String($pfxSecret)
-    $flags = 'MachineKeySet,Exportable,PersistKeySet'
-    $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new()
-    $cert.Import($pfxBytes, $null, $flags)
-
-    $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'LocalMachine')
-    $store.Open('ReadWrite')
-    $exists = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
-    if ($exists.Count -eq 0) {
-        Write-Output "--> Installing Certificate [$($certificate.Name)] to Local Certificate Store"
+try {
+    if (-not (Test-Path -Path $LogDirectory)) {
+        New-Item -ItemType Directory -Path $LogDirectory | Out-Null
     }
 
-    if ($exists.Count -eq 1) {
-        Write-Output "--> Checking Certificate [$($certificate.Name)] in Local Certificate Store"
-    }
+    Start-Transcript -Path $logPath
+    $transcriptStarted = $true
 
-    try {
-        # Check if the certificate already exists in the store
-        $exists = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
+    Write-Output "-------------------------------------------"
+    Write-Output "  Key Vault ACME :: Certificate Installer  "
+    Write-Output "-------------------------------------------"
+    Write-Output "Execution mode: unattended-safe (non-interactive default)"
 
-        if ($exists.Count -eq 0) {
-            $store.Add($cert)
-            Write-Output "--> Certificate Installed Successfully! - $($cert.Thumbprint)" `r
+    # Configure PowerShell / modules
+    if ($InstallMissingModules) {
+        Write-Output "--> Preparing PSGallery and NuGet (InstallMissingModules enabled)"
+        $installationPolicyState = (Get-PSRepository -Name 'PSGallery').InstallationPolicy
+        if ($installationPolicyState -ne 'Trusted') {
+            Write-Output "Installing Latest NuGet Package Release"
+            Install-PackageProvider -Name NuGet -Force | Out-Null
+
+            Write-Output "Updating PSGallery InstallationPolicy [Trusted]"
+            Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
         }
         else {
-            # Check the expiration of the certificate in the local store
-            $localCert = $exists[0]
-            $expiryThreshold = (Get-Date).AddDays(7)  # Certificates that will expire in 7 days or less
-            $daysToExpire = ($localCert.NotAfter - (Get-Date)).Days  # Calculate remaining days
+            Write-Output "PSGallery 'Trusted', NuGet PackageProvider Ok!"
+        }
+    }
+    else {
+        Write-Output "--> Skipping PSGallery changes (InstallMissingModules not set)"
+    }
 
-            if ($localCert.NotAfter -lt $expiryThreshold) {
-                Write-Output "--> Certificate [$($certificate.Name)] in local store is expiring soon. Updating..."
-                # Remove the old certificate and install the new one
-                $store.Remove($localCert)
-                $store.Add($cert)
-                Write-Output "--> Certificate Updated Successfully! - $($cert.Thumbprint)" `r
+    Write-Output "--> Checking PowerShell Modules"
+    @(
+        'Az.Accounts',
+        'Az.Resources',
+        'Az.KeyVault'
+    ) | ForEach-Object {
+        Install-RequiredModule -Name $_
+    }
+
+    # Connect to Azure
+    Connect-AzContext
+
+    # Retrieve Key Vault certificate metadata
+    Write-Output "--> Checking Certificates in Key Vault [$KeyVaultName]"
+    $certDataList = @()
+
+    foreach ($certificateHostName in $certificateNames) {
+        try {
+            $certificateName = $certificateHostName.Replace('.', '-')
+            $certRequest = Get-AzKeyVaultCertificate -VaultName $KeyVaultName -Name $certificateName
+            $certDataList += [PSCustomObject]@{
+                HostName   = $certificateHostName
+                Name       = $certRequest.Name
+                CreatedOn  = $certRequest.Created.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+                ExpiresOn  = $certRequest.Expires.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+                Thumbprint = $certRequest.Thumbprint
             }
-            else {
-                Write-Output "--> Certificate [$($certificate.Name)] is valid in local store - $($cert.Thumbprint)."
-                Write-Output "--> Expiration Date: $($localCert.NotAfter.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')), Days Remaining: $daysToExpire. No update required." `r
+        }
+        catch {
+            Write-Warning "Error retrieving certificate [$certificateHostName]: $($_.Exception.Message)"
+            $hasProcessingErrors = $true
+        }
+    }
+
+    if (-not $certDataList -or $certDataList.Count -eq 0) {
+        $message = "No certificates were retrieved from Key Vault [$KeyVaultName]."
+        if ($FailIfNoCertificates) {
+            throw $message
+        }
+
+        Write-Warning $message
+        return
+    }
+
+    $certDataList | Format-Table -AutoSize
+
+    # Install/update certificates in local machine store
+    Write-Output "--> Downloading certificates from Key Vault [$KeyVaultName]"
+    $installedCertThumbprintsByHostName = @{}
+
+    foreach ($certificate in $certDataList) {
+        try {
+            $pfxSecret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $certificate.Name -AsPlainText
+            $pfxBytes = [Convert]::FromBase64String($pfxSecret)
+            $flags = 'MachineKeySet,Exportable,PersistKeySet'
+            $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new()
+            $cert.Import($pfxBytes, $null, $flags)
+
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('My', 'LocalMachine')
+            $store.Open('ReadWrite')
+            try {
+                $existingByThumbprint = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
+                if ($existingByThumbprint.Count -eq 0) {
+                    Write-Output "--> Installing certificate [$($certificate.Name)] to LocalMachine\\My"
+                    $store.Add($cert)
+                    Write-Output "--> Certificate installed successfully: $($cert.Thumbprint)"
+                }
+                else {
+                    $localCert = $existingByThumbprint[0]
+                    $expiryThreshold = (Get-Date).AddDays($RenewalThresholdDays)
+                    $daysToExpire = ($localCert.NotAfter - (Get-Date)).Days
+
+                    if ($localCert.NotAfter -lt $expiryThreshold) {
+                        Write-Output "--> Certificate [$($certificate.Name)] expires in $daysToExpire day(s); updating..."
+                        $store.Remove($localCert)
+                        $store.Add($cert)
+                        Write-Output "--> Certificate updated successfully: $($cert.Thumbprint)"
+                    }
+                    else {
+                        Write-Output "--> Certificate [$($certificate.Name)] is valid in local store. Expires: $($localCert.NotAfter.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')) (in $daysToExpire day(s))."
+                    }
+                }
+
+                $installedCertThumbprintsByHostName[$certificate.HostName] = $cert.Thumbprint
+            }
+            finally {
+                $store.Close()
+            }
+        }
+        catch {
+            Write-Warning "Failed processing certificate [$($certificate.HostName)]: $($_.Exception.Message)"
+            $hasProcessingErrors = $true
+        }
+    }
+
+    # Update IIS bindings (if available)
+    $canManageIis = $false
+    if (Get-Command -Name Get-WindowsFeature -ErrorAction SilentlyContinue) {
+        $iisCheck = (Get-WindowsFeature -Name 'Web-Server').InstallState
+        $canManageIis = $iisCheck -eq 'Installed'
+    }
+    elseif (Get-Command -Name Get-WebBinding -ErrorAction SilentlyContinue) {
+        $canManageIis = $true
+    }
+
+    if ($canManageIis) {
+        if (-not (Get-Command -Name Get-WebBinding -ErrorAction SilentlyContinue)) {
+            Import-Module WebAdministration -ErrorAction Stop
+        }
+
+        foreach ($certificateHostName in $certificateNames) {
+            Write-Output "--> Checking IIS HTTPS bindings for host [$certificateHostName]"
+
+            if (-not $installedCertThumbprintsByHostName.ContainsKey($certificateHostName)) {
+                Write-Warning "Skipping IIS update for [$certificateHostName] - no installed thumbprint found."
+                $hasProcessingErrors = $true
+                continue
+            }
+
+            $targetThumbprint = $installedCertThumbprintsByHostName[$certificateHostName]
+            $sslSiteBindings = Get-WebBinding -Protocol 'https'
+            $filteredBindings = @($sslSiteBindings | Where-Object { $_.bindingInformation -like "*:$certificateHostName" })
+
+            if ($filteredBindings.Count -eq 0) {
+                Write-Output "No IIS HTTPS binding found for [$certificateHostName]."
+                continue
+            }
+
+            foreach ($sslBinding in $filteredBindings) {
+                Write-Output "--> Binding found: $($sslBinding.bindingInformation)"
+                Write-Output "--> Replacing certificate hash [$($sslBinding.certificateHash)] with [$targetThumbprint]"
+
+                $sslBinding.RemoveSslCertificate()
+                $sslBinding.AddSslCertificate($targetThumbprint, 'My')
             }
         }
     }
-    finally { $store.Close() }
+    else {
+        Write-Output "--> IIS not detected; skipping IIS binding updates."
+    }
+
+    if ($hasProcessingErrors) {
+        throw 'One or more certificate operations reported errors. Review transcript log for details.'
+    }
+
+    Write-Output '--> Certificate renewal task completed successfully.'
 }
-
-#
-# Information Internet Services
-#
-
-$iisCheck = (Get-WindowsFeature -Name 'Web-Server').InstallState
-if ($iisCheck -eq 'Installed') {
-
-    foreach ($certificate in $certificateNames) {
-
-        Write-Output "--> Checking IIS Binding for Certificate - [$certificate]"
-
-        # Get SSL site bindings
-        $sslSiteBindings = Get-WebBinding -Protocol 'https'
-
-        # Filter bindings for the certificate in the bindingInformation
-        $filteredBindings = $sslSiteBindings | Where-Object { $_.bindingInformation -like "*:$certificate" }
-
-        # Check if any bindings matched and output result
-        if ($filteredBindings) {
-            Write-Output "--> Binding found for [$certificate]: $($filteredBindings.bindingInformation)"
-            $sslBinding = $filteredBindings
-
-            Write-Output "--> Removing Old Certificate: [$($sslBinding.certificateHash)]"
-            $sslBinding.RemoveSslCertificate()
-
-            Write-Output "--> Adding New Certificate: [$($cert.Thumbprint)]" `r
-            $sslBinding.AddSslCertificate($cert.Thumbprint, 'My')
-        }
-        else {
-            Write-Output "No binding found for [$certificate]." `r
-        }
+finally {
+    if ($transcriptStarted) {
+        Stop-Transcript | Out-Null
     }
 }
-
-Stop-Transcript

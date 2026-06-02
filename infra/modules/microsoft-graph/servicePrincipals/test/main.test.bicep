@@ -39,7 +39,7 @@ module basicServicePrincipal '../main.bicep' = {
   params: {
     appId: basicAppId
     displayName: '${appPrefix}-basic-${environmentName}'
-    servicePrincipalDescription: 'Basic service principal for ${environmentName} environment'
+    notes: 'Basic service principal for ${environmentName} environment'
     accountEnabled: true
     servicePrincipalType: 'Application'
     tags: union(commonTags, ['basic'])
@@ -53,7 +53,7 @@ module ssoServicePrincipal '../main.bicep' = {
   params: {
     appId: ssoAppId
     displayName: '${appPrefix}-sso-${environmentName}'
-    servicePrincipalDescription: 'SSO-enabled service principal for ${environmentName}'
+    notes: 'SSO-enabled service principal for ${environmentName}'
     accountEnabled: true
     preferredSingleSignOnMode: 'saml'
     loginUrl: 'https://${appPrefix}-${environmentName}.azurewebsites.net/login'
@@ -75,7 +75,7 @@ module restrictedServicePrincipal '../main.bicep' = {
   params: {
     appId: restrictedAppId
     displayName: '${appPrefix}-restricted-${environmentName}'
-    servicePrincipalDescription: 'Restricted service principal requiring role assignments for ${environmentName}'
+    notes: 'Restricted service principal requiring role assignments for ${environmentName}'
     accountEnabled: true
     appRoleAssignmentRequired: true
     servicePrincipalType: 'Application'
@@ -84,7 +84,6 @@ module restrictedServicePrincipal '../main.bicep' = {
       'admin@${appPrefix}.com'
     ]
     tags: union(commonTags, ['restricted', 'high-security'])
-    notes: 'This service principal requires explicit role assignments for access'
     ownerIds: commonOwners
   }
 }

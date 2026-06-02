@@ -7,8 +7,8 @@ Assign app roles to users, groups, and service principals in **under 3 minutes**
 ## ⚡ Prerequisites
 
 - Azure CLI 2.50+ or Azure PowerShell 10.0+
-- Azure AD permissions: **Application Administrator** or **Global Administrator**
-- Existing Azure AD application with defined app roles
+- Microsoft Entra permissions: **Application Administrator** or **Global Administrator**
+- Existing Microsoft Entra application with defined app roles
 - Principal IDs (users, groups, or service principals) to assign roles to
 
 ```bash
@@ -46,10 +46,7 @@ param appRoleId = '12345678-1234-1234-1234-123456789abc' // App role ID from ste
 param principalId = '98765432-1234-1234-1234-987654321def' // Client service principal ID
 param resourceId = '11111111-2222-3333-4444-555555555555' // API service principal ID
 param resourceDisplayName = 'My API Application'
-param principalDisplayName = 'My Client Application'
 param principalType = 'ServicePrincipal'
-param appRoleValue = 'Data.Read'
-param environmentName = 'production'
 ```
 
 ### Step 3: Deploy Role Assignment
@@ -81,10 +78,7 @@ param appRoleId = '87654321-4321-4321-4321-876543210abc' // Admin role ID
 param principalId = '55555555-6666-7777-8888-999999999999' // User object ID
 param resourceId = '11111111-2222-3333-4444-555555555555' // API service principal ID
 param resourceDisplayName = 'Enterprise API'
-param principalDisplayName = 'John Doe (Admin)'
 param principalType = 'User'
-param appRoleValue = 'Admin'
-param environmentName = 'production'
 ```
 
 ### Step 2: Deploy User Assignment
@@ -131,21 +125,18 @@ var roleAssignments = [
   {
     principalId: 'admin-user-id'
     principalType: 'User'
-    principalDisplayName: 'API Administrator'
     appRoleValue: 'Admin'
     description: 'Full administrative access'
   }
   {
     principalId: 'read-only-sp-id'
     principalType: 'ServicePrincipal'
-    principalDisplayName: 'Read-Only Service'
     appRoleValue: 'Data.Read'
     description: 'Read-only data access'
   }
   {
     principalId: 'managers-group-id'
     principalType: 'Group'
-    principalDisplayName: 'Managers Group'
     appRoleValue: 'Manager'
     description: 'Management level access'
   }
@@ -159,14 +150,11 @@ module roleAssignments_deploy 'modules/microsoft-graph/appRoleAssignedTo/main.bi
     principalId: assignment.principalId
     resourceId: apiServicePrincipalId
     resourceDisplayName: 'Enterprise API - ${environment}'
-    principalDisplayName: assignment.principalDisplayName
     principalType: assignment.principalType
-    appRoleValue: assignment.appRoleValue
-    environmentName: environment
   }
 }]
 
-output assignmentIds array = [for i in range(0, length(roleAssignments)): roleAssignments_deploy[i].outputs.id]
+output assignmentIds array = [for i in range(0, length(roleAssignments)): roleAssignments_deploy[i].outputs.resourceId]
 ```
 
 ### Step 2: Deploy Multi-Role Setup
@@ -301,7 +289,7 @@ Ensure you have **Application Administrator** or **Global Administrator** role.
 ### Principal Types
 
 | Type | Description | Use Case |
-|------|-------------|----------|
+| ------ | ------------- | ---------- |
 | `User` | Individual user account | Personal access, admin assignments |
 | `ServicePrincipal` | Application identity | API-to-API access, automation |
 | `Group` | Collection of users | Team access, department permissions |
