@@ -139,6 +139,9 @@ param acmebotPackageUri string
 @maxValue(100)
 param acmeBotRenewBeforeExpiry int
 
+@description('Use system DNS resolver for challenge verification (recommended for private DNS scenarios)')
+param acmeBotUseSystemNameServer bool = false
+
 @description('Azure Subscription Id - Public Dns Zones')
 param acmeAzurePublicDnsSubscriptionId string
 
@@ -166,7 +169,8 @@ param azurePrivateDnsZones array
 @allowed([
   'https://acme-v02.api.letsencrypt.org/directory'
   'https://api.buypass.com/acme/directory'
-  'https://acme.zerossl.com/v2/DV90/'
+  'https://emea.acme.atlas.globalsign.com/directory'
+  'https://acme.zerossl.com/v2/DV90'
   'https://dv.acme-v02.api.pki.goog/directory'
   'https://acme.ssl.com/sslcom-dv-rsa'
   'https://acme.ssl.com/sslcom-dv-ecc'
@@ -675,6 +679,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
           Acmebot__Environment: acmeEnvironment
           Acmebot__VaultBaseUrl: acmeKeyVaultUrlBase
           Acmebot__Contacts: acmeContacts
+          Acmebot__UseSystemNameServer: string(acmeBotUseSystemNameServer)
         }
       }
       {

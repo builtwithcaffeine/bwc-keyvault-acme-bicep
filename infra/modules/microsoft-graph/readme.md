@@ -5,7 +5,7 @@ This folder contains reusable Bicep modules for Microsoft Entra ID resources via
 ## Prerequisites
 
 - Azure CLI or Azure PowerShell
-- Bicep CLI (recommended: 0.24+)
+- Bicep CLI (recommended: 0.44+)
 - `microsoftGraphV1` extension alias configured in `bicepconfig.json`
 - Microsoft Entra permissions required by each module operation
 

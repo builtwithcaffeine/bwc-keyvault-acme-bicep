@@ -50,8 +50,6 @@ param azurePrivateDnsZones = [
 
 param acmebotPackageUri = 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
 
-
-
 //@description('ACME Azure Public DNS Subscription ID')
 param acmeAzurePublicDnsSubscriptionId = subscriptionId
 
@@ -60,6 +58,9 @@ param acmeAzurePrivateDnsSubscriptionId = subscriptionId
 
 //@description('ACME Bot Renew Before Expiry')
 param acmeBotRenewBeforeExpiry = 30
+
+//@description('Use system DNS resolver for challenge verification (private DNS helper)')
+param acmeBotUseSystemNameServer = false
 
 //@description('ACME Endpoint')
 param acmeEndpoint = 'https://acme-v02.api.letsencrypt.org/directory'
