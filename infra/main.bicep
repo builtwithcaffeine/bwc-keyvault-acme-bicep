@@ -1,6 +1,5 @@
 targetScope = 'subscription'
 
-//
 @description('Azure Tenant Id')
 var tenantId = subscription().tenantId
 
@@ -128,12 +127,20 @@ var kvAccessPolicies = [
 // Key Vault ACME Values
 
 // Acmebot Package URL
-var acmebotPackageUri = 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
 
-@description('Number of days before certificate expiry to attempt renewal')
-@minValue(1)
-@maxValue(365)
+@description('Key Vault Base Url for ACME Bot')
+var acmeKeyVaultUrlBase = 'https://${keyvaultName}.vault.azure.net/'
+
+@description('Acmebot Package Uri')
+param acmebotPackageUri string
+
+@description('Percentage of certificate lifetime remaining before renewal (0-100)')
+@minValue(0)
+@maxValue(100)
 param acmeBotRenewBeforeExpiry int
+
+@description('Use system DNS resolver for challenge verification (recommended for private DNS scenarios)')
+param acmeBotUseSystemNameServer bool = false
 
 @description('Azure Subscription Id - Public Dns Zones')
 param acmeAzurePublicDnsSubscriptionId string
@@ -162,7 +169,8 @@ param azurePrivateDnsZones array
 @allowed([
   'https://acme-v02.api.letsencrypt.org/directory'
   'https://api.buypass.com/acme/directory'
-  'https://acme.zerossl.com/v2/DV90/'
+  'https://emea.acme.atlas.globalsign.com/directory'
+  'https://acme.zerossl.com/v2/DV90'
   'https://dv.acme-v02.api.pki.goog/directory'
   'https://acme.ssl.com/sslcom-dv-rsa'
   'https://acme.ssl.com/sslcom-dv-ecc'
@@ -172,9 +180,6 @@ param acmeEndpoint string
 
 @description('Azure Environment')
 param acmeEnvironment string
-
-// Key Vault Url Base
-var acmeKeyVaultUrlBase = 'https://${keyvaultName}.${environment().suffixes.keyvaultDns}'
 
 @description('Key Vault ACME - Email Contact(s)')
 param acmeContacts string
@@ -191,56 +196,54 @@ var privateDnsZonesArray = [
 
 //
 // Azure Resource - [Existing]
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
+
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (!enableCreateVirtualNetwork) {
   scope: resourceGroup(existingVirtualNetworkResourceGroup)
   name: existingVirtualNetworkName
 }
 
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!enableCreateVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingVirtualNetworkSubnetSharedName
 }
 
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-05-01' existing = if (!enableCreateVirtualNetwork) {
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!enableCreateVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingVirtualNetworkSubnetAppServiceName
 }
 
 // Private End Point - Key Vault
-resource privateDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[0]
 }
 
 // Private End Point - Storage Account (Blob)
-resource privateDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[1]
 }
 
 // Private End Point - Storage Account (File)
-resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[2]
 }
 
 // Private End Point - Storage Account (Table)
-resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[3]
 }
 
 // Private End Point - Storage Account (Queue)
-resource privateDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[4]
 }
 
 // Private End Point - Web Site
-resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
+resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
   scope: resourceGroup(sharedResourceGroupName)
   name: privateDnsZonesArray[5]
 }
@@ -300,6 +303,9 @@ module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' 
       ]
       tags: tags
     }
+    dependsOn: [
+      createVirtualNetwork
+    ]
   }
 ]
 
@@ -371,7 +377,7 @@ module createFederatedCredential 'modules/microsoft-graph/applications/federated
   scope: resourceGroup(resourceGroupName)
   params: {
     applicationId: createAppRegistration.outputs.uniqueName
-    name: 'KeyVaultACME-Federated-Credential-${environmentType}'
+    name: 'keyvault-acme-federated-credential-${environmentType}'
     issuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
     credentialDescription: 'Federated Identity Credential for Key Vault ACME - ${environmentType}'
     subject: createUserManagedIdentity.outputs.principalId
@@ -379,6 +385,9 @@ module createFederatedCredential 'modules/microsoft-graph/applications/federated
       'api://AzureADTokenExchange'
     ]
   }
+  dependsOn: [
+    createResourceGroup
+  ]
 }
 
 // Create Enterprise Application
@@ -392,6 +401,9 @@ module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bi
     accountEnabled: true
     appRoleAssignmentRequired: true
   }
+  dependsOn: [
+    createResourceGroup
+  ]
 }
 
 // Create User Managed Identity
@@ -438,6 +450,9 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = {
     ]
     tags: tags
   }
+  dependsOn: [
+    createResourceGroup
+  ]
 }
 
 module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' = {
@@ -448,7 +463,6 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
     location: location
     kind: 'StorageV2'
     skuName: 'Standard_ZRS'
-    tags: tags
     publicNetworkAccess: 'Disabled'
     networkAcls: {
       bypass: 'AzureServices'
@@ -456,9 +470,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
     }
     secretsExportConfiguration: {
       accessKey1Name: 'accessKey1'
-      accessKey2Name: 'accessKey2'
       connectionString1Name: 'connectionString1'
-      connectionString2Name: 'connectionString2'
       keyVaultResourceId: createKeyVault.outputs.resourceId
     }
     blobServices: {
@@ -546,7 +558,11 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
         }
       }
     ]
+    tags: tags
   }
+  dependsOn: [
+    createKeyVault
+  ]
 }
 
 module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.15.1' = {
@@ -564,8 +580,7 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
   ]
 }
 
-module createApplicationInsights 'br/public:avm/res/insights/component:0.7.1' = {
-module createApplicationInsights 'br/public:avm/res/insights/component:0.7.1' = {
+module createApplicationInsights 'br/public:avm/res/insights/component:0.7.2' = {
   name: 'create-application-insights'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -582,6 +597,9 @@ module createApplicationInsights 'br/public:avm/res/insights/component:0.7.1' = 
     ]
     tags: tags
   }
+  dependsOn: [
+    createLogAnalyticsWorkspace
+  ]
 }
 
 module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
@@ -661,6 +679,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
           Acmebot__Environment: acmeEnvironment
           Acmebot__VaultBaseUrl: acmeKeyVaultUrlBase
           Acmebot__Contacts: acmeContacts
+          Acmebot__UseSystemNameServer: string(acmeBotUseSystemNameServer)
         }
       }
       {
@@ -769,10 +788,10 @@ module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
   ]
 }
 
-module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
+module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2'  = [
   for dnsZoneResourceId in azurePublicDnsZones: if (enablePublicDnsRoleAssignment) {
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
-    scope: resourceGroup(azurePublicDnsResourceGroup)
+    scope: resourceGroup(acmeAzurePublicDnsSubscriptionId, azurePublicDnsResourceGroup)
     params: {
       principalId: createUserManagedIdentity.outputs.principalId
       roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/befefa01-2a29-4197-83a8-272ff33ce314' // DNS Zone Contributor
@@ -787,7 +806,7 @@ module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-rol
 module roleAssignmentPrivateDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
   for dnsZoneResourceId in azurePrivateDnsZones: if (enablePrivateDnsRoleAssignment) {
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
-    scope: resourceGroup(azurePrivateDnsResourceGroup)
+    scope: resourceGroup(acmeAzurePrivateDnsSubscriptionId, azurePrivateDnsResourceGroup)
     params: {
       principalId: createUserManagedIdentity.outputs.principalId
       roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f' // Private DNS Zone Contributor

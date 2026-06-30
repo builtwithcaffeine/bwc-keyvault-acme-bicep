@@ -78,7 +78,10 @@ var ownersConfig = !empty(ownerIds)
       relationships: ownerIds
       relationshipSemantics: 'append'
     }
-  : null
+  : {
+      relationships: []
+      relationshipSemantics: 'append'
+    }
 
 // Configure members relationship if provided
 var membersConfig = !empty(memberIds)
@@ -86,7 +89,10 @@ var membersConfig = !empty(memberIds)
       relationships: memberIds
       relationshipSemantics: 'append'
     }
-  : null
+  : {
+      relationships: []
+      relationshipSemantics: 'append'
+    }
 
 // ========== RESOURCES ==========
 
@@ -100,7 +106,7 @@ resource group 'Microsoft.Graph/groups@v1.0' = {
   mailNickname: mailNickname
   mailEnabled: mailEnabled
   securityEnabled: securityEnabled
-  groupTypes: !empty(groupTypes) ? groupTypes : null
+  groupTypes: groupTypes
   isAssignableToRole: isAssignableToRole ? isAssignableToRole : null
   //isManagementRestricted: isManagementRestricted
   visibility: contains(groupTypes, 'Unified') ? visibility : null
@@ -138,10 +144,10 @@ output securityEnabled bool = group.securityEnabled
 output groupTypes array = group.groupTypes
 
 @description('Whether the group can be assigned to roles')
-output isAssignableToRole bool = group.isAssignableToRole
+output isAssignableToRole bool = group.isAssignableToRole ?? false
 
 // @description('Whether the group is management restricted')
 // output isManagementRestricted bool = group.isManagementRestricted
 
 @description('The group visibility')
-output visibility string = group.visibility
+output visibility string = group.visibility ?? 'Private'

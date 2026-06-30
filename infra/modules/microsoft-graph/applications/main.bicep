@@ -151,48 +151,60 @@ param redirectUriSettings array = []
 // ========== VARIABLES ==========
 
 // Configure owners relationship if provided
-var ownersConfig = !empty(ownerIds) ? {
+var ownersConfig = {
   relationships: ownerIds
   relationshipSemantics: 'append'
-} : null
+}
 
 // Web configuration - build base object
 var webConfigBase = {
   homePageUrl: !empty(homePageUrl) ? homePageUrl : null
   logoutUrl: !empty(logoutUrl) ? logoutUrl : null
   redirectUris: !empty(webRedirectUris) ? webRedirectUris : []
-  implicitGrantSettings: (enableAccessTokenIssuance || enableIdTokenIssuance) ? {
-    enableAccessTokenIssuance: enableAccessTokenIssuance
-    enableIdTokenIssuance: enableIdTokenIssuance
-  } : null
+  implicitGrantSettings: (enableAccessTokenIssuance || enableIdTokenIssuance)
+    ? {
+        enableAccessTokenIssuance: enableAccessTokenIssuance
+        enableIdTokenIssuance: enableIdTokenIssuance
+      }
+    : null
 }
 
 // Add redirectUriSettings only if not empty
-var webConfigWithSettings = !empty(redirectUriSettings) ? union(webConfigBase, {
-  redirectUriSettings: redirectUriSettings
-}) : webConfigBase
+var webConfigWithSettings = !empty(redirectUriSettings)
+  ? union(webConfigBase, {
+      redirectUriSettings: redirectUriSettings
+    })
+  : webConfigBase
 
 // Final web config - only set if any web properties are configured
-var webConfig = (!empty(webRedirectUris) || !empty(homePageUrl) || !empty(logoutUrl) || enableAccessTokenIssuance || enableIdTokenIssuance || !empty(redirectUriSettings)) ? webConfigWithSettings : null
+var webConfig = (!empty(webRedirectUris) || !empty(homePageUrl) || !empty(logoutUrl) || enableAccessTokenIssuance || enableIdTokenIssuance || !empty(redirectUriSettings))
+  ? webConfigWithSettings
+  : null
 
 // SPA configuration
-var spaConfig = !empty(spaRedirectUris) ? {
-  redirectUris: spaRedirectUris
-} : null
+var spaConfig = !empty(spaRedirectUris)
+  ? {
+      redirectUris: spaRedirectUris
+    }
+  : null
 
 // Public client configuration
-var publicClientConfig = !empty(publicClientRedirectUris) ? {
-  redirectUris: publicClientRedirectUris
-} : null
+var publicClientConfig = !empty(publicClientRedirectUris)
+  ? {
+      redirectUris: publicClientRedirectUris
+    }
+  : null
 
 // API configuration
-var apiConfig = (!empty(oauth2PermissionScopes) || !empty(preAuthorizedApplications) || !empty(knownClientApplications) || acceptMappedClaims || requestedAccessTokenVersion != 2) ? {
-  acceptMappedClaims: acceptMappedClaims
-  knownClientApplications: knownClientApplications
-  oauth2PermissionScopes: oauth2PermissionScopes
-  preAuthorizedApplications: preAuthorizedApplications
-  requestedAccessTokenVersion: requestedAccessTokenVersion
-} : null
+var apiConfig = (!empty(oauth2PermissionScopes) || !empty(preAuthorizedApplications) || !empty(knownClientApplications) || acceptMappedClaims || requestedAccessTokenVersion != 2)
+  ? {
+      acceptMappedClaims: acceptMappedClaims
+      knownClientApplications: knownClientApplications
+      oauth2PermissionScopes: oauth2PermissionScopes
+      preAuthorizedApplications: preAuthorizedApplications
+      requestedAccessTokenVersion: requestedAccessTokenVersion
+    }
+  : null
 
 // ========== RESOURCES ==========
 
@@ -221,7 +233,9 @@ resource application 'Microsoft.Graph/applications@v1.0' = {
   parentalControlSettings: !empty(parentalControlSettings) ? parentalControlSettings : null
   requestSignatureVerification: !empty(requestSignatureVerification) ? requestSignatureVerification : null
   serviceManagementReference: !empty(serviceManagementReference) ? serviceManagementReference : null
-  servicePrincipalLockConfiguration: !empty(servicePrincipalLockConfiguration) ? servicePrincipalLockConfiguration : null
+  servicePrincipalLockConfiguration: !empty(servicePrincipalLockConfiguration)
+    ? servicePrincipalLockConfiguration
+    : null
   tokenEncryptionKeyId: !empty(tokenEncryptionKeyId) ? tokenEncryptionKeyId : null
   samlMetadataUrl: !empty(samlMetadataUrl) ? samlMetadataUrl : null
   nativeAuthenticationApisEnabled: nativeAuthenticationApisEnabled != 'none' ? nativeAuthenticationApisEnabled : null
@@ -231,7 +245,7 @@ resource application 'Microsoft.Graph/applications@v1.0' = {
   publicClient: publicClientConfig
   api: apiConfig
   optionalClaims: !empty(optionalClaims) ? optionalClaims : null
-  owners: ownersConfig
+  owners: !empty(ownerIds) ? ownersConfig : null
 }
 
 // ========== OUTPUTS ==========
@@ -267,7 +281,9 @@ output identifierUris array = application.identifierUris
 output defaultRedirectUri string = application.defaultRedirectUri != null ? application.defaultRedirectUri : ''
 
 @description('The group membership claims setting')
-output groupMembershipClaims string = application.groupMembershipClaims != null ? application.groupMembershipClaims : 'None'
+output groupMembershipClaims string = application.groupMembershipClaims != null
+  ? application.groupMembershipClaims
+  : 'None'
 
 @description('Application tags')
 output tags array = application.tags

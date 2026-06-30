@@ -92,10 +92,10 @@ param tokenEncryptionKeyId string = ''
 // ========== VARIABLES ==========
 
 // Configure owners relationship if provided
-var ownersConfig = !empty(ownerIds) ? {
+var ownersConfig = {
   relationships: ownerIds
   relationshipSemantics: 'append'
-} : null
+}
 
 // ========== RESOURCES ==========
 
@@ -120,10 +120,12 @@ resource servicePrincipal 'Microsoft.Graph/servicePrincipals@v1.0' = {
   notes: !empty(notes) ? notes : null
   notificationEmailAddresses: notificationEmailAddresses
   oauth2PermissionScopes: oauth2PermissionScopes
-  owners: ownersConfig
+  owners: !empty(ownerIds) ? ownersConfig : null
   passwordCredentials: passwordCredentials
   preferredSingleSignOnMode: !empty(preferredSingleSignOnMode) ? preferredSingleSignOnMode : null
-  preferredTokenSigningKeyThumbprint: !empty(preferredTokenSigningKeyThumbprint) ? preferredTokenSigningKeyThumbprint : null
+  preferredTokenSigningKeyThumbprint: !empty(preferredTokenSigningKeyThumbprint)
+    ? preferredTokenSigningKeyThumbprint
+    : null
   replyUrls: replyUrls
   samlSingleSignOnSettings: !empty(samlSingleSignOnSettings) ? samlSingleSignOnSettings : null
   servicePrincipalType: servicePrincipalType
@@ -158,4 +160,6 @@ output appRoleAssignmentRequired bool = servicePrincipal.appRoleAssignmentRequir
 output servicePrincipalNames array = servicePrincipal.servicePrincipalNames
 
 @description('The preferred single sign-on mode')
-output preferredSingleSignOnMode string = servicePrincipal.preferredSingleSignOnMode != null ? servicePrincipal.preferredSingleSignOnMode : ''
+output preferredSingleSignOnMode string = servicePrincipal.preferredSingleSignOnMode != null
+  ? servicePrincipal.preferredSingleSignOnMode
+  : ''
