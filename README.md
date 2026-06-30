@@ -1,8 +1,8 @@
-# Azure Key Vault ACME on Azure (Bicep)
+# Azure Key Vault ACME Certificate Management
 
-Public Infrastructure as Code repository for deploying a production-ready, private-networked **Acmebot v5** platform on Azure.
+Production-ready Infrastructure as Code (IaC) for deploying an ACME-based certificate automation platform on Azure using Bicep.
 
-This project automates ACME certificate issuance and renewal into Azure Key Vault using a Linux Function App (Flex Consumption), managed identity, and DNS-01 validation.
+This solution provisions a secure Function App + Key Vault pattern (with private networking and managed identity) and deploys the latest Acmebot package automatically.
 
 ---
 
