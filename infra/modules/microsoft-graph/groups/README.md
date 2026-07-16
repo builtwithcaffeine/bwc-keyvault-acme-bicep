@@ -130,3 +130,7 @@ module group 'modules/microsoft-graph/groups/main.bicep' = {
 ## Testing
 
 See `test/main.test.bicep` for multi-scenario examples used to validate this module.
+
+---
+
+*Last updated: 2026-07-16*

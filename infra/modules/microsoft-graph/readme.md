@@ -104,3 +104,7 @@ module oidc 'modules/microsoft-graph/applications/federatedIdentityCredentials/m
 - Use least privilege for deployment identities.
 - Prefer explicit, environment-scoped naming for reproducible deployments.
 - For exact parameter/output contracts, use each module's `main.bicep` as the source of truth.
+
+---
+
+*Last updated: 2026-07-16*

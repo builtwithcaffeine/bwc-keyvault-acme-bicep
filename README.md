@@ -34,9 +34,12 @@ It is intentionally opinionated toward enterprise-friendly defaults (private end
   - App Registration
   - Federated Identity Credential
   - Service Principal
-- Optional:
+- Optional (when `enableCreateVirtualNetwork = true`):
   - Virtual Network + subnets
+  - Network Security Group (associated to both subnets)
+- Optional (when `enableCreatePrivateDnsZones = true`):
   - Private DNS zones
+- Optional:
   - DNS role assignments for Public/Private DNS
 
 ---
@@ -94,7 +97,7 @@ Key settings to validate first:
 - `azurePublicDnsZones`, `azurePrivateDnsZones`
 - `acmeContacts`
 - `acmeEndpoint`
-- `acmeBotRenewBeforeExpiry` (0–100, default 30)
+- `acmeBotRenewBeforeExpiry` (days before expiry to trigger renewal, 1–365, default 30)
 - `acmeBotUseSystemNameServer` (default `false`, useful for private DNS resolver scenarios)
 
 Supported ACME endpoints in this template:
@@ -147,6 +150,8 @@ az functionapp config appsettings list -g <resource-group> -n <function-app-name
 ## Security notes
 
 - Keep DNS credentials and secrets out of source control
+- Storage Account uses managed identity authentication — shared key access is disabled (`allowSharedKeyAccess: false`); no connection strings are stored or exported
+- Storage Account uses infrastructure encryption (`requireInfrastructureEncryption: true`) for double-layer at-rest encryption
 - Prefer managed identity + least-privilege RBAC on DNS zones and Key Vault
 - For private DNS-heavy environments, consider setting `acmeBotUseSystemNameServer = true`
 - Restrict dashboard/API access via Entra and app roles where appropriate
@@ -158,6 +163,9 @@ az functionapp config appsettings list -g <resource-group> -n <function-app-name
 - This repo deploys Acmebot package from GitHub releases using `onedeploy`
 - DNS role assignment modules support cross-subscription scopes via explicit subscription parameters
 - The baseline is tuned for Azure public cloud and Acmebot v5 behavior
+- Key Vault uses Access Policies (not RBAC) to preserve compatibility with Application Gateway certificate integration
+- Purge protection is disabled on Key Vault to allow redeployment with the same vault name without waiting for soft-delete retention to expire
+- NSG is only created when `enableCreateVirtualNetwork = true`; when using an existing VNet, NSG management is assumed to be handled by the existing network
 
 ---
 

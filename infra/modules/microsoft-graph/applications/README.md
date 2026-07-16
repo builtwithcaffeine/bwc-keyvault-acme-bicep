@@ -150,3 +150,7 @@ module apiApp 'modules/microsoft-graph/applications/main.bicep' = {
 - This module uses extension alias `microsoftGraphV1` from `bicepconfig.json`.
 - `appName` maps to Graph `uniqueName`.
 - Use `ownerIds` with Entra object IDs when assigning owners.
+
+---
+
+*Last updated: 2026-07-16*
