@@ -105,3 +105,7 @@ module restrictedSp 'modules/microsoft-graph/servicePrincipals/main.bicep' = {
 
 - Use `ownerIds` as Entra object IDs.
 - The older `servicePrincipalDescription` property is not part of this module contract.
+
+---
+
+*Last updated: 2026-07-16*

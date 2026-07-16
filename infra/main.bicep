@@ -38,6 +38,8 @@ param tags object = {
 // Resource Group Name
 var resourceGroupName = 'rg-x-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
+var networkSecurityGroupName = 'nsg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+
 // Virtual Network Name
 var virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
@@ -124,12 +126,10 @@ var kvAccessPolicies = [
   }
 ]
 
-// Key Vault ACME Values
-
 // Acmebot Package URL
 
 @description('Key Vault Base Url for ACME Bot')
-var acmeKeyVaultUrlBase = 'https://${keyvaultName}.vault.azure.net/'
+var acmeKeyVaultUrlBase = 'https://${keyvaultName}${environment().suffixes.keyvaultDns}/'
 
 @description('Acmebot Package Uri')
 param acmebotPackageUri string
@@ -186,12 +186,12 @@ param acmeContacts string
 
 @description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
-  'privatelink.vaultcore.azure.net' // [0]
-  'privatelink.blob.${environment().suffixes.storage}' // [1]
-  'privatelink.file.${environment().suffixes.storage}' // [2]
-  'privatelink.table.${environment().suffixes.storage}' // [3]
-  'privatelink.queue.${environment().suffixes.storage}' // [4]
-  'privatelink.azurewebsites.net' // [5]
+  'privatelink.vaultcore.azure.net'                       // [0]
+  'privatelink.blob.${environment().suffixes.storage}'    // [1]
+  'privatelink.file.${environment().suffixes.storage}'    // [2]
+  'privatelink.table.${environment().suffixes.storage}'   // [3]
+  'privatelink.queue.${environment().suffixes.storage}'   // [4]
+  'privatelink.azurewebsites.net'                         // [5]
 ]
 
 //
@@ -262,6 +262,33 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.3' = 
   }
 }
 
+// Create User Managed Identity
+module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.1' = {
+  name: 'create-user-managed-identity-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    name: userManagedIdentityName
+    location: location
+    tags: tags
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
+module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (enableCreateVirtualNetwork) {
+  name: 'create-nsg-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    name: networkSecurityGroupName
+    location: location
+    tags: tags
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
 module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.9.0' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -275,17 +302,19 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.9.0' = 
       {
         name: 'snet-shared-resources'
         addressPrefix: virtualNetworkSubnetShared
+        networkSecurityGroupResourceId: createNetworkSecurityGroup!.outputs.resourceId
       }
       {
         name: 'snet-kvacme-appservice'
         addressPrefix: virtualNetworkSubnetAppService
+        networkSecurityGroupResourceId: createNetworkSecurityGroup!.outputs.resourceId
         delegation: 'Microsoft.App/environments'
       }
     ]
     tags: tags
   }
   dependsOn: [
-    createResourceGroup
+    createNetworkSecurityGroup
   ]
 }
 
@@ -386,7 +415,8 @@ module createFederatedCredential 'modules/microsoft-graph/applications/federated
     ]
   }
   dependsOn: [
-    createResourceGroup
+    createAppRegistration
+    createUserManagedIdentity
   ]
 }
 
@@ -402,21 +432,7 @@ module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bi
     appRoleAssignmentRequired: true
   }
   dependsOn: [
-    createResourceGroup
-  ]
-}
-
-// Create User Managed Identity
-module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.1' = {
-  name: 'create-user-managed-identity-${locationShortCode}'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    name: userManagedIdentityName
-    location: location
-    tags: tags
-  }
-  dependsOn: [
-    createResourceGroup
+    createAppRegistration
   ]
 }
 
@@ -448,10 +464,25 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = {
         }
       }
     ]
+    diagnosticSettings: [
+      {
+        workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+        logCategoriesAndGroups: [
+          {
+            category: 'AuditEvent'
+          }
+        ]
+        metricCategories: [
+          {
+            category: 'AllMetrics'
+          }
+        ]
+      }
+    ]
     tags: tags
   }
   dependsOn: [
-    createResourceGroup
+    createVirtualNetwork
   ]
 }
 
@@ -464,14 +495,11 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
     kind: 'StorageV2'
     skuName: 'Standard_ZRS'
     publicNetworkAccess: 'Disabled'
+    allowSharedKeyAccess: false
+    requireInfrastructureEncryption: true
     networkAcls: {
       bypass: 'AzureServices'
       defaultAction: 'Deny'
-    }
-    secretsExportConfiguration: {
-      accessKey1Name: 'accessKey1'
-      connectionString1Name: 'connectionString1'
-      keyVaultResourceId: createKeyVault.outputs.resourceId
     }
     blobServices: {
       containers: [
@@ -492,7 +520,17 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
     roleAssignments: [
       {
         principalId: createUserManagedIdentity.outputs.principalId
-        roleDefinitionIdOrName: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe' // Storage Blob Data Contributor
+        roleDefinitionIdOrName: 'Storage Blob Data Owner'
+        principalType: 'ServicePrincipal'
+      }
+      {
+        principalId: createUserManagedIdentity.outputs.principalId
+        roleDefinitionIdOrName: 'Storage Queue Data Contributor'
+        principalType: 'ServicePrincipal'
+      }
+      {
+        principalId: createUserManagedIdentity.outputs.principalId
+        roleDefinitionIdOrName: 'Storage Table Data Contributor'
         principalType: 'ServicePrincipal'
       }
     ]
@@ -662,8 +700,10 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
           APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'ClientId=${createUserManagedIdentity.outputs.clientId};Authorization=AAD'
           APPLICATIONINSIGHTS_CONNECTION_STRING: createApplicationInsights.outputs.connectionString
 
-          // Storage
-          AzureWebJobsStorage: '@Microsoft.KeyVault(VaultName=${keyvaultName};SecretName=connectionString1)'
+          // Storage (Managed Identity - no shared key access)
+          AzureWebJobsStorage__accountName: storageAccountName
+          AzureWebJobsStorage__credential: 'managedidentity'
+          AzureWebJobsStorage__clientId: createUserManagedIdentity.outputs.clientId
 
           // Enterprise App Values
           WEBSITE_AUTH_AAD_ALLOWED_TENANTS: tenantId
@@ -701,7 +741,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
               enabled: true
               registration: {
                 clientId: createAppRegistration.outputs.applicationId
-                openIdIssuer: 'https://sts.windows.net/${tenantId}/v2.0'
+                openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
               }
             }
           }
@@ -788,7 +828,7 @@ module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
   ]
 }
 
-module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2'  = [
+module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
   for dnsZoneResourceId in azurePublicDnsZones: if (enablePublicDnsRoleAssignment) {
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
     scope: resourceGroup(acmeAzurePublicDnsSubscriptionId, azurePublicDnsResourceGroup)

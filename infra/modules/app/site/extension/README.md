@@ -1,28 +1,11 @@
-# oneDeploy Bicep Module
+# Site Extension OneDeploy `[Microsoft.Web/sites/extensions]`
 
-Deploys a zip package to an Azure Function App using the `onedeploy` site extension.
+This module deploys the OneDeploy site extension package to an existing function app.
 
-## File
-
-- `main.bicep`
-
-## Parameters
-
-- `functionAppName` (`string`): Name of the target Function App.
-- `packageUri` (`string`): Publicly reachable URL to the deployment zip package.
-
-## What it creates
-
-- `Microsoft.Web/sites/extensions` resource:
-  - Name: `${functionAppName}/onedeploy`
-  - Properties:
-    - `packageUri`
-    - `remoteBuild: false`
-
-## Usage example
+You can reference the module as follows:
 
 ```bicep
-module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
+module siteExtension 'modules/app/site/extension/main.bicep' = {
   name: 'deploy-function-app-package-weu'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -32,7 +15,90 @@ module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
 }
 ```
 
+For examples, please refer to the [Usage Examples](#usage-examples) section.
+
+## Navigation
+
+- [Resource Types](#resource-types)
+- [Parameters](#parameters)
+- [Outputs](#outputs)
+
+## Resource Types
+
+| Resource Type | API Version | References |
+| :-- | :-- | :-- |
+| `Microsoft.Web/sites/extensions` | 2025-03-01 | <ul style="padding-left: 0px;"><li>[AzAdvertizer](https://www.azadvertizer.net/azresourcetypes/microsoft.web_sites_extensions.html)</li><li>[Template reference](https://learn.microsoft.com/en-us/azure/templates/Microsoft.Web/2025-03-01/sites/extensions)</li></ul> |
+
+## Parameters
+
+**Required parameters**
+
+| Parameter | Type | Description |
+| :-- | :-- | :-- |
+| [`functionAppName`](#parameter-functionappname) | string | The name of the parent site resource. |
+| [`packageUri`](#parameter-packageuri) | string | The ZIP package URI for the release artifact. |
+
+**Optional parameters**
+
+| Parameter | Type | Description |
+| :-- | :-- | :-- |
+| [`extensionName`](#parameter-extensionname) | string | The name of the extension. |
+
+### Parameter: `functionAppName`
+
+The name of the parent site resource.
+
+- Required: Yes
+- Type: string
+
+### Parameter: `packageUri`
+
+The ZIP package URI for the release artifact.
+
+- Required: Yes
+- Type: string
+
+### Parameter: `extensionName`
+
+The name of the extension.
+
+- Required: No
+- Type: string
+- Default: `'onedeploy'`
+- Allowed:
+  ```bicep
+  [
+    'onedeploy'
+  ]
+  ```
+
+## Outputs
+
+| Output | Type | Description |
+| :-- | :-- | :-- |
+| `name` | string | The name of the extension. |
+| `resourceId` | string | The resource ID of the extension. |
+| `resourceGroupName` | string | The resource group the extension was deployed into. |
+
+## Usage Examples
+
+```bicep
+module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
+  name: 'deploy-function-app-package-weu'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    functionAppName: functionAppName
+    packageUri: acmebotPackageUri
+  }
+}
+```
+
 ## Notes
 
 - Ensure the Function App exists before running this module.
-- If the Function App uses private storage for package deployment, make sure identity/RBAC is configured correctly.
+- The extension deploys to `${functionAppName}/onedeploy` by default.
+- If package deployment storage is private, ensure the function app identity and RBAC are configured correctly.
+
+---
+
+*Last updated: 2026-07-16*

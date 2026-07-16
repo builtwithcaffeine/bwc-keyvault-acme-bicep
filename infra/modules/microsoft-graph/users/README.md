@@ -82,3 +82,7 @@ module app 'modules/microsoft-graph/applications/main.bicep' = {
 
 - This module is an `existing` reference and does not create users.
 - Use `userId` output when wiring into group membership (`memberIds`) or ownership fields (`ownerIds`).
+
+---
+
+*Last updated: 2026-07-16*

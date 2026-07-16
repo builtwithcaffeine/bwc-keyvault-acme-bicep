@@ -73,3 +73,7 @@ These are **application IDs**. Convert each to its tenant service principal obje
 
 - `resourceId` must be the **service principal object ID**, not the app ID.
 - When `consentType` is `AllPrincipals`, `principalId` is ignored.
+
+---
+
+*Last updated: 2026-07-16*

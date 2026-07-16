@@ -62,3 +62,7 @@ module roleAssignment 'modules/microsoft-graph/appRoleAssignedTo/main.bicep' = {
 - `QUICKSTART.md`
 - `../servicePrincipals/README.md`
 - `../oauth2PermissionGrants/README.md`
+
+---
+
+*Last updated: 2026-07-16*

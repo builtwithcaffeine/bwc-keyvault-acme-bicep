@@ -71,3 +71,7 @@ module githubOidc 'modules/microsoft-graph/applications/federatedIdentityCredent
 - `QUICKSTART.md`
 - `../README.md` (applications module)
 - `../../readme.md` (module index)
+
+---
+
+*Last updated: 2026-07-16*

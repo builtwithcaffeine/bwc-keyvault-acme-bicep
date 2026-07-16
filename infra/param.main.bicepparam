@@ -56,7 +56,7 @@ param acmeAzurePublicDnsSubscriptionId = subscriptionId
 //@description('ACME Azure Private DNS Subscription ID')
 param acmeAzurePrivateDnsSubscriptionId = subscriptionId
 
-//@description('ACME Bot Renew Before Expiry')
+//@description('ACME Bot Renew Before Expiry - number of days before certificate expiry to trigger renewal (1-365)')
 param acmeBotRenewBeforeExpiry = 30
 
 //@description('Use system DNS resolver for challenge verification (private DNS helper)')
