@@ -21,7 +21,7 @@ param enableCreateVirtualNetwork = true
 // Azure Network - New Virtual Network
 param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
 param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
-param virtualNetworkSubnetAppService = '10.0.0.16/28' // 16 Addresses
+param virtualNetworkSubnetAppService = '10.0.0.32/27' // 32 Addresses
 
 // Azure Network - Existing Virtual Network
 param existingVirtualNetworkResourceGroup = 'rg-bwc-dns-prod-weu'
@@ -48,25 +48,28 @@ param azurePrivateDnsZones = [
 //
 // Key Vault ACME Values
 
-param acmebotPackageUri = 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
+// Deploy the latest GitHub release asset by default.
+// Set this to 'latest', '5.0.0', or 'v5.0.0' when you want to pin a release.
+param acmebotReleaseTag = 'latest'
 
-//@description('ACME Azure Public DNS Subscription ID')
+
+// @description('ACME Azure Public DNS Subscription ID')
 param acmeAzurePublicDnsSubscriptionId = subscriptionId
 
-//@description('ACME Azure Private DNS Subscription ID')
+// @description('ACME Azure Private DNS Subscription ID')
 param acmeAzurePrivateDnsSubscriptionId = subscriptionId
 
-//@description('ACME Bot Renew Before Expiry - number of days before certificate expiry to trigger renewal (1-365)')
+// @description('ACME Bot Renew Before Expiry - percentage of certificate lifetime remaining (0-100)')
 param acmeBotRenewBeforeExpiry = 30
 
-//@description('Use system DNS resolver for challenge verification (private DNS helper)')
+// @description('Use system DNS resolver for challenge verification (private DNS helper)')
 param acmeBotUseSystemNameServer = false
 
-//@description('ACME Endpoint')
+// @description('ACME Endpoint')
 param acmeEndpoint = 'https://acme-v02.api.letsencrypt.org/directory'
 
-//@description('Azure Environment')
+// @description('Azure Environment')
 param acmeEnvironment = 'AzureCloud'
 
-//@description('ACME Contacts Email Address')
+// @description('ACME Contacts Email Address')
 param acmeContacts = 'alerts@builtwithcaffeine.cloud'

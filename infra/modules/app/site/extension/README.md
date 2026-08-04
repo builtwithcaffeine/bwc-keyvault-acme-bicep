@@ -27,18 +27,18 @@ For examples, please refer to the [Usage Examples](#usage-examples) section.
 
 | Resource Type | API Version | References |
 | :-- | :-- | :-- |
-| `Microsoft.Web/sites/extensions` | 2025-03-01 | <ul style="padding-left: 0px;"><li>[AzAdvertizer](https://www.azadvertizer.net/azresourcetypes/microsoft.web_sites_extensions.html)</li><li>[Template reference](https://learn.microsoft.com/en-us/azure/templates/Microsoft.Web/2025-03-01/sites/extensions)</li></ul> |
+| `Microsoft.Web/sites/extensions` | 2025-03-01 | [AzAdvertizer](https://www.azadvertizer.net/azresourcetypes/microsoft.web_sites_extensions.html) · [Template reference](https://learn.microsoft.com/en-us/azure/templates/Microsoft.Web/2025-03-01/sites/extensions) |
 
 ## Parameters
 
-**Required parameters**
+### Required parameters
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
 | [`functionAppName`](#parameter-functionappname) | string | The name of the parent site resource. |
 | [`packageUri`](#parameter-packageuri) | string | The ZIP package URI for the release artifact. |
 
-**Optional parameters**
+### Optional parameters
 
 | Parameter | Type | Description |
 | :-- | :-- | :-- |
@@ -66,6 +66,7 @@ The name of the extension.
 - Type: string
 - Default: `'onedeploy'`
 - Allowed:
+
   ```bicep
   [
     'onedeploy'
@@ -101,4 +102,6 @@ module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
 
 ---
 
-*Last updated: 2026-07-16*
+### Last updated
+
+2026-08-04

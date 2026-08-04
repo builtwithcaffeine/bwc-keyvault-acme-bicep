@@ -22,15 +22,19 @@ param locationShortCode string
 @allowed(['dev', 'acc', 'prod'])
 param environmentType string
 
-@description('Deployed By')
+@description('Identity or pipeline responsible for the deployment')
 @minLength(3)
 param deployedBy string
 
-param tags object = {
+@description('Additional resource tags. Values override the CAF-aligned baseline tags.')
+param tags object = {}
+
+var resourceTags = union({
   environmentType: environmentType
+  workload: 'kvacme'
+  managedBy: 'Bicep'
   deployedBy: deployedBy
-  deployedDate: utcNow('yyyy-MM-dd')
-}
+}, tags)
 
 //
 // Parameters [Created Resources]
@@ -44,7 +48,10 @@ var networkSecurityGroupName = 'nsg-${customerName}-kvacme-${environmentType}-${
 var virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
 // User Managed Identity Name
-var userManagedIdentityName = 'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+var userManagedIdentityArray = [
+  'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
+  'id-${customerName}-kvacme-cert-manager-${environmentType}-${locationShortCode}'
+]
 
 // Key Vault Name
 var keyvaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
@@ -105,10 +112,10 @@ param existingVirtualNetworkSubnetAppServiceName string
 
 // Azure Key Vault
 
-@description('Key Vault Access Policy - User Managed Identity')
+@description('Key Vault Access Policies')
 var kvAccessPolicies = [
   {
-    objectId: createUserManagedIdentity.outputs.principalId
+    objectId: createUserManagedIdentity[0].outputs.principalId // Acmebot Managed Identity
     permissions: {
       secrets: [
         'get'
@@ -124,6 +131,33 @@ var kvAccessPolicies = [
     }
     tenantId: tenantId
   }
+  {
+    objectId: createUserManagedIdentity[1].outputs.principalId // Key Vault ACME - Cert Manager Managed Identity
+    permissions: {
+      secrets: [
+        'get'
+        'list'
+      ]
+      certificates: [
+        'get'
+        'list'
+      ]
+    }
+    tenantId: tenantId
+  }
+  {
+    objectId: createKeyVaultSecurityGroup.outputs.groupId // Entra Id Group for Certificate Listing
+    permissions: {
+      secrets: [
+        'get'
+        'list'
+      ]
+      certificates: [
+        'get'
+        'list'
+      ]
+    }
+  }
 ]
 
 // Acmebot Package URL
@@ -131,8 +165,18 @@ var kvAccessPolicies = [
 @description('Key Vault Base Url for ACME Bot')
 var acmeKeyVaultUrlBase = 'https://${keyvaultName}${environment().suffixes.keyvaultDns}/'
 
-@description('Acmebot Package Uri')
-param acmebotPackageUri string
+@description('Acmebot release tag used to construct the package URI. Use latest, 5.0.0, or v5.0.0.')
+@minLength(1)
+param acmebotReleaseTag string = 'latest'
+
+var normalizedAcmebotReleaseTag = startsWith(toLower(acmebotReleaseTag), 'v')
+  ? acmebotReleaseTag
+  : 'v${acmebotReleaseTag}'
+
+#disable-next-line no-hardcoded-env-urls
+var acmebotPackageUri = toLower(acmebotReleaseTag) == 'latest'
+  ? 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
+  : 'https://github.com/polymind-inc/acmebot/releases/download/${normalizedAcmebotReleaseTag}/acmebot.zip'
 
 @description('Percentage of certificate lifetime remaining before renewal (0-100)')
 @minValue(0)
@@ -258,38 +302,154 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.3' = 
   params: {
     name: resourceGroupName
     location: location
-    tags: tags
+    tags: resourceTags
   }
 }
 
-// Create User Managed Identity
-module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.1' = {
-  name: 'create-user-managed-identity-${locationShortCode}'
+// Create Entra Security Group - Key Vault Certificate [Get - List]
+module createKeyVaultSecurityGroup '../modules/microsoft-graph/groups/main.bicep' = {
+  name: 'create-entra-keyvault-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
-    name: userManagedIdentityName
-    location: location
-    tags: tags
+    displayName: 'KVACME - Certificate Reader Role RBAC - ${toUpper(environmentType)}'
+    groupName: 'sec-${customerName}-keyvault-acme-kv-access-${environmentType}'
+    mailNickname: 'sec-${customerName}-keyvault-acme-kv-access-${environmentType}'
+    groupDescription: 'Provides List/Get permission for Users'
+    ownerIds: []
+    memberIds: []
+    mailEnabled: false
+    securityEnabled: true
+    visibility: 'Private'
   }
   dependsOn: [
     createResourceGroup
   ]
 }
 
+// Create Entra Security Group - Enterprise App SSO
+module createEntraSecurityGroup '../modules/microsoft-graph/groups/main.bicep' = {
+  name: 'create-entra-security-group-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    displayName: 'KVACME - SSO Authentication - ${toUpper(environmentType)}'
+    groupName: 'sec-${customerName}-keyvault-acme-auth-${environmentType}'
+    mailNickname: 'sec-${customerName}-keyvault-acme-auth-${environmentType}'
+    groupDescription: 'Key Vault ACME - SSO Authentication Security Group'
+    ownerIds: []
+    memberIds: []
+    mailEnabled: false
+    securityEnabled: true
+    visibility: 'Private'
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
+// Create Application Registration
+module createAppRegistration '../modules/microsoft-graph/applications/main.bicep' = {
+  name: 'create-entra-app-registration-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    appName: appRegistrationName
+    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
+    appDescription: 'App Registration for Key Vault ACME'
+    homePageUrl: 'https://${functionAppName}.azurewebsites.net'
+    webRedirectUris: [
+      'https://${functionAppName}.azurewebsites.net/.auth/login/aad/callback'
+    ]
+    enableIdTokenIssuance: true
+    requiredResourceAccess: [
+      {
+        resourceAppId: '00000003-0000-0000-c000-000000000000' // Microsoft Graph
+        resourceAccess: [
+          {
+            id: '64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0' // email
+            type: 'Scope'
+          }
+          {
+            id: '37f7f235-527c-4136-accd-4a02d197296e' // openid
+            type: 'Scope'
+          }
+          {
+            id: '14dad69e-099b-42c9-810b-d002981feec1' // profile
+            type: 'Scope'
+          }
+        ]
+      }
+    ]
+  }
+  dependsOn: [
+    createResourceGroup
+  ]
+}
+
+module createFederatedCredential '../modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
+  name: 'create-entra-federated-credential-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    applicationId: createAppRegistration.outputs.uniqueName
+    name: 'keyvault-acme-federated-credential-${environmentType}'
+    issuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
+    credentialDescription: 'Federated Identity Credential for Key Vault ACME - ${environmentType}'
+    subject: createUserManagedIdentity[0].outputs.principalId
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+  }
+  dependsOn: [
+    createAppRegistration
+    createUserManagedIdentity
+  ]
+}
+
+// Create Enterprise Application
+module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main.bicep' = {
+  name: 'create-entra-service-principal-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    appId: createAppRegistration.outputs.applicationId
+    displayName: 'Key Vault ACME - Authentication - ${toUpper(environmentType)}'
+    homepage: 'https://${functionAppName}.azurewebsites.net'
+    accountEnabled: true
+    appRoleAssignmentRequired: true
+
+  }
+  dependsOn: [
+    createAppRegistration
+  ]
+}
+
+// Create User Managed Identity
+module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = [
+  for userManagedIdentityName in userManagedIdentityArray: {
+    name: 'create-umi-${userManagedIdentityName}-${locationShortCode}'
+    scope: resourceGroup(resourceGroupName)
+    params: {
+      name: userManagedIdentityName
+      location: location
+      tags: resourceTags
+    }
+    dependsOn: [
+      createResourceGroup
+    ]
+  }
+]
+
 module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (enableCreateVirtualNetwork) {
-  name: 'create-nsg-${locationShortCode}'
+  name: 'create-network-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: networkSecurityGroupName
     location: location
-    tags: tags
+    tags: resourceTags
   }
   dependsOn: [
     createResourceGroup
   ]
 }
 
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.9.0' = if (enableCreateVirtualNetwork) {
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.0' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -311,7 +471,7 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.9.0' = 
         delegation: 'Microsoft.App/environments'
       }
     ]
-    tags: tags
+    tags: resourceTags
   }
   dependsOn: [
     createNetworkSecurityGroup
@@ -327,10 +487,12 @@ module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' 
       location: 'global'
       virtualNetworkLinks: [
         {
-          virtualNetworkResourceId: createVirtualNetwork!.outputs.resourceId
+          virtualNetworkResourceId: enableCreateVirtualNetwork
+            ? createVirtualNetwork!.outputs.resourceId
+            : sharedVirtualNetwork.id
         }
       ]
-      tags: tags
+      tags: resourceTags
     }
     dependsOn: [
       createVirtualNetwork
@@ -338,115 +500,27 @@ module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' 
   }
 ]
 
-// Create Entra Security Group
-module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
-  name: 'create-entra-security-group-${locationShortCode}'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    displayName: '${customerName} Key Vault ACME - Authentication - ${environmentType}'
-    groupName: 'sec-${customerName}-keyvault-acme-auth-${environmentType}'
-    mailNickname: 'sec-${customerName}-keyvault-acme-auth-${environmentType}'
-    groupDescription: 'Key Vault ACME - Security Group'
-    ownerIds: []
-    memberIds: []
-    mailEnabled: false
-    securityEnabled: true
-    visibility: 'Private'
-  }
-  dependsOn: [
-    createResourceGroup
-  ]
-}
-
-// Create Application Registration
-module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' = {
-  name: 'create-entra-app-registration-${locationShortCode}'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
-    appName: appRegistrationName
-    appDescription: 'App Registration for Key Vault ACME'
-    homePageUrl: 'https://${functionAppName}.azurewebsites.net'
-    webRedirectUris: [
-      'https://${functionAppName}.azurewebsites.net/.auth/login/aad/callback'
-    ]
-    enableIdTokenIssuance: true
-    requiredResourceAccess: [
-      // These need manually accepting in the portal once created
-      {
-        resourceAppId: '00000003-0000-0000-c000-000000000000' // Microsoft Graph
-        resourceAccess: [
-          {
-            id: '64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0' // email
-            type: 'Scope'
-          }
-          {
-            id: '37f7f235-527c-4136-accd-4a02d197296e' // openid
-            type: 'Scope'
-          }
-          {
-            id: '14dad69e-099b-42c9-810b-d002981feec1' // profile
-            type: 'Scope'
-          }
-          {
-            id: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d' // User.Read
-            type: 'Scope'
-          }
-        ]
-      }
-    ]
-  }
-  dependsOn: [
-    createResourceGroup
-  ]
-}
-
-module createFederatedCredential 'modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
-  name: 'create-entra-federated-credential-${locationShortCode}'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    applicationId: createAppRegistration.outputs.uniqueName
-    name: 'keyvault-acme-federated-credential-${environmentType}'
-    issuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
-    credentialDescription: 'Federated Identity Credential for Key Vault ACME - ${environmentType}'
-    subject: createUserManagedIdentity.outputs.principalId
-    audiences: [
-      'api://AzureADTokenExchange'
-    ]
-  }
-  dependsOn: [
-    createAppRegistration
-    createUserManagedIdentity
-  ]
-}
-
-// Create Enterprise Application
-module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bicep' = {
-  name: 'create-entra-service-principal-${locationShortCode}'
-  scope: resourceGroup(resourceGroupName)
-  params: {
-    appId: createAppRegistration.outputs.applicationId
-    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
-    homepage: 'https://${functionAppName}.azurewebsites.net'
-    accountEnabled: true
-    appRoleAssignmentRequired: true
-  }
-  dependsOn: [
-    createAppRegistration
-  ]
-}
-
 // Create Key Vault
-module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = {
+module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
   name: 'create-keyvault-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: keyvaultName
     location: location
     sku: 'standard'
+    enableVaultForDeployment: false
+    enableVaultForTemplateDeployment: false
+    enableVaultForDiskEncryption: false
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
     enablePurgeProtection: false
     enableRbacAuthorization: false
     accessPolicies: kvAccessPolicies
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      bypass: 'None'
+      defaultAction: 'Deny'
+    }
     privateEndpoints: [
       {
         service: 'vault'
@@ -479,14 +553,21 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.13.3' = {
         ]
       }
     ]
-    tags: tags
+    roleAssignments: [
+      {
+        principalId: createUserManagedIdentity[1].outputs.principalId //  'id-${customerName}-kvacme-cert-manager-${environmentType}-${locationShortCode}'
+        roleDefinitionIdOrName: 'Key Vault Reader'
+        principalType: 'ServicePrincipal'
+      }
+    ]
+    tags: resourceTags
   }
   dependsOn: [
     createVirtualNetwork
   ]
 }
 
-module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' = {
+module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' = {
   name: 'create-storage-account'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -495,13 +576,24 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
     kind: 'StorageV2'
     skuName: 'Standard_ZRS'
     publicNetworkAccess: 'Disabled'
+    allowBlobPublicAccess: false
     allowSharedKeyAccess: false
+    defaultToOAuthAuthentication: true
+    allowCrossTenantReplication: false
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion: 'TLS1_2'
     requireInfrastructureEncryption: true
     networkAcls: {
-      bypass: 'AzureServices'
+      bypass: 'None'
       defaultAction: 'Deny'
     }
     blobServices: {
+      containerDeleteRetentionPolicyEnabled: true
+      containerDeleteRetentionPolicyDays: 14
+      deleteRetentionPolicyEnabled: true
+      deleteRetentionPolicyDays: 14
+      isVersioningEnabled: true
+      versionDeletePolicyDays: 30
       containers: [
         {
           name: 'app-package-${functionAppName}'
@@ -516,20 +608,46 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
           publicAccess: 'None'
         }
       ]
+      diagnosticSettings: [
+        {
+          workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+        }
+      ]
+    }
+    fileServices: {
+      diagnosticSettings: [
+        {
+          workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+        }
+      ]
+    }
+    queueServices: {
+      diagnosticSettings: [
+        {
+          workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+        }
+      ]
+    }
+    tableServices: {
+      diagnosticSettings: [
+        {
+          workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+        }
+      ]
     }
     roleAssignments: [
       {
-        principalId: createUserManagedIdentity.outputs.principalId
+        principalId: createUserManagedIdentity[0].outputs.principalId
         roleDefinitionIdOrName: 'Storage Blob Data Owner'
         principalType: 'ServicePrincipal'
       }
       {
-        principalId: createUserManagedIdentity.outputs.principalId
+        principalId: createUserManagedIdentity[0].outputs.principalId
         roleDefinitionIdOrName: 'Storage Queue Data Contributor'
         principalType: 'ServicePrincipal'
       }
       {
-        principalId: createUserManagedIdentity.outputs.principalId
+        principalId: createUserManagedIdentity[0].outputs.principalId
         roleDefinitionIdOrName: 'Storage Table Data Contributor'
         principalType: 'ServicePrincipal'
       }
@@ -596,14 +714,19 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.32.1' =
         }
       }
     ]
-    tags: tags
+    diagnosticSettings: [
+      {
+        workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+      }
+    ]
+    tags: resourceTags
   }
   dependsOn: [
     createKeyVault
   ]
 }
 
-module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.15.1' = {
+module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.16.0' = {
   name: 'create-log-analytics-workspace-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -611,14 +734,17 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
     location: location
     dataRetention: 90
     skuName: 'PerGB2018'
-    tags: tags
+    features: {
+      disableLocalAuth: true
+    }
+    tags: resourceTags
   }
   dependsOn: [
     createResourceGroup
   ]
 }
 
-module createApplicationInsights 'br/public:avm/res/insights/component:0.7.2' = {
+module createApplicationInsights 'br/public:avm/res/insights/component:0.8.0' = {
   name: 'create-application-insights'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -630,10 +756,10 @@ module createApplicationInsights 'br/public:avm/res/insights/component:0.7.2' = 
       {
         roleDefinitionIdOrName: 'Monitoring Metrics Publisher'
         principalType: 'ServicePrincipal'
-        principalId: createUserManagedIdentity.outputs.principalId
+        principalId: createUserManagedIdentity[0].outputs.principalId
       }
     ]
-    tags: tags
+    tags: resourceTags
   }
   dependsOn: [
     createLogAnalyticsWorkspace
@@ -649,14 +775,14 @@ module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
     kind: 'linux'
     skuName: 'FC1'
     skuCapacity: 2
-    tags: tags
+    tags: resourceTags
   }
   dependsOn: [
     createApplicationInsights
   ]
 }
 
-module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
+module createFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
   name: 'create-function-app-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -665,6 +791,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
     kind: 'functionapp,linux'
     serverFarmResourceId: createAppServicePlan.outputs.resourceId
     httpsOnly: true
+    clientAffinityEnabled: false
     publicNetworkAccess: 'Disabled'
     outboundVnetRouting: {
       applicationTraffic: true
@@ -673,10 +800,10 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
     virtualNetworkSubnetResourceId: enableCreateVirtualNetwork
       ? createVirtualNetwork!.outputs.subnetResourceIds[1]
       : existingVirtualNetworkSubnetAppService.id
-    keyVaultAccessIdentityResourceId: createUserManagedIdentity.outputs.resourceId
+    keyVaultAccessIdentityResourceId: createUserManagedIdentity[0].outputs.resourceId
     managedIdentities: {
       userAssignedResourceIds: [
-        createUserManagedIdentity.outputs.resourceId
+        createUserManagedIdentity[0].outputs.resourceId
       ]
     }
     basicPublishingCredentialsPolicies: [
@@ -697,24 +824,24 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
           FUNCTIONS_EXTENSION_VERSION: '~4'
 
           // Application Insights
-          APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'ClientId=${createUserManagedIdentity.outputs.clientId};Authorization=AAD'
+          APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'ClientId=${createUserManagedIdentity[0].outputs.clientId};Authorization=AAD'
           APPLICATIONINSIGHTS_CONNECTION_STRING: createApplicationInsights.outputs.connectionString
 
           // Storage (Managed Identity - no shared key access)
           AzureWebJobsStorage__accountName: storageAccountName
           AzureWebJobsStorage__credential: 'managedidentity'
-          AzureWebJobsStorage__clientId: createUserManagedIdentity.outputs.clientId
+          AzureWebJobsStorage__clientId: createUserManagedIdentity[0].outputs.clientId
 
           // Enterprise App Values
           WEBSITE_AUTH_AAD_ALLOWED_TENANTS: tenantId
-          OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: createUserManagedIdentity.outputs.clientId
+          OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: createUserManagedIdentity[0].outputs.clientId
           // https://learn.microsoft.com/en-us/azure/app-service/configure-authentication-provider-aad?tabs=workforce-configuration#use-a-managed-identity-instead-of-a-secret-preview
 
           // Key Vault ACME Values
           Acmebot__RenewBeforeExpiry: string(acmeBotRenewBeforeExpiry)
           Acmebot__AzureDns__SubscriptionId: acmeAzurePublicDnsSubscriptionId
           Acmebot__AzurePrivateDns__SubscriptionId: acmeAzurePrivateDnsSubscriptionId
-          Acmebot__ManagedIdentityClientId: createUserManagedIdentity.outputs.clientId
+          Acmebot__ManagedIdentityClientId: createUserManagedIdentity[0].outputs.clientId
           Acmebot__Endpoint: acmeEndpoint
           Acmebot__Environment: acmeEnvironment
           Acmebot__VaultBaseUrl: acmeKeyVaultUrlBase
@@ -773,7 +900,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
           value: '${createStorageAccount.outputs.serviceEndpoints.blob}app-package-${functionAppName}'
           authentication: {
             type: 'UserAssignedIdentity'
-            userAssignedIdentityResourceId: createUserManagedIdentity.outputs.resourceId
+            userAssignedIdentityResourceId: createUserManagedIdentity[0].outputs.resourceId
           }
         }
       }
@@ -782,6 +909,11 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
         maximumInstanceCount: 100
       }
     }
+    diagnosticSettings: [
+      {
+        workspaceResourceId: createLogAnalyticsWorkspace.outputs.resourceId
+      }
+    ]
     siteConfig: {
       alwaysOn: false
       ftpsState: 'Disabled'
@@ -808,15 +940,15 @@ module createFunctionApp 'br/public:avm/res/web/site:0.23.1' = {
             }
           ]
         }
-        tags: tags
+        tags: resourceTags
       }
     ]
-    tags: tags
+    tags: resourceTags
   }
 }
 
 // Deploy Acmebot package from GitHub releases into the Flex Consumption blob container
-module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
+module deployFunctionAppPackage '../modules/app/site/extension/main.bicep' = {
   name: 'deploy-function-app-package-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -833,7 +965,7 @@ module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-rol
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
     scope: resourceGroup(acmeAzurePublicDnsSubscriptionId, azurePublicDnsResourceGroup)
     params: {
-      principalId: createUserManagedIdentity.outputs.principalId
+      principalId: createUserManagedIdentity[0].outputs.principalId
       roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/befefa01-2a29-4197-83a8-272ff33ce314' // DNS Zone Contributor
       resourceId: dnsZoneResourceId
     }
@@ -848,7 +980,7 @@ module roleAssignmentPrivateDnsZone 'br/public:avm/ptn/authorization/resource-ro
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
     scope: resourceGroup(acmeAzurePrivateDnsSubscriptionId, azurePrivateDnsResourceGroup)
     params: {
-      principalId: createUserManagedIdentity.outputs.principalId
+      principalId: createUserManagedIdentity[0].outputs.principalId
       roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f' // Private DNS Zone Contributor
       resourceId: dnsZoneResourceId
     }

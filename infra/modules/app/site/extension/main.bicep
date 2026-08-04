@@ -20,9 +20,12 @@ resource app 'Microsoft.Web/sites@2025-03-01' existing = {
 resource oneDeploy 'Microsoft.Web/sites/extensions@2025-03-01' = {
   name: extensionName
   parent: app
+  // The OneDeploy properties are supported by the RP but are not yet present in the Bicep type definition.
+  #disable-next-line BCP187
   properties: {
     packageUri: packageUri
     remoteBuild: false
+    type: 'zip'
   }
 }
 
