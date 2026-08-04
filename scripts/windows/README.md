@@ -27,10 +27,8 @@ Automates renewing an IIS-bound TLS certificate from Azure Key Vault on a Window
 
 Set these at the top of the script to skip auto-detection:
 
-| Variable         | Purpose                                                                                 |
-|------------------|------------------------------------------------------------------------------------------|
-| `$KeyVaultName`  | Use a specific Key Vault instead of auto-discovering the single accessible vault.         |
-| `$AzureClientId` | Client ID of a user-assigned managed identity to log in with, instead of the system-assigned identity. |
+- `$KeyVaultName` — use a specific Key Vault instead of auto-discovering the single accessible vault.
+- `$AzureClientId` — client ID of a user-assigned managed identity to log in with, instead of the system-assigned identity.
 
 ## Usage
 

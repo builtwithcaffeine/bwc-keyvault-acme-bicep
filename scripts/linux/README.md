@@ -27,15 +27,13 @@ Automates renewing a web server's TLS certificate from Azure Key Vault on a Linu
 
 Set these at the top of the script (or export before running) to skip auto-detection:
 
-| Variable          | Purpose                                                         |
-|--------------------|------------------------------------------------------------------|
-| `KEYVAULT_NAME`    | Use a specific Key Vault instead of auto-discovering the single accessible vault. |
-| `AZURE_CLIENT_ID`  | Client ID of a user-assigned managed identity to log in with, instead of the system-assigned identity. |
+- `KEYVAULT_NAME` — use a specific Key Vault instead of auto-discovering the single accessible vault.
+- `AZURE_CLIENT_ID` — client ID of a user-assigned managed identity to log in with, instead of the system-assigned identity.
 
 ## Usage
 
 ```bash
-bash setup.sh
+bash Invoke-KeyVaultCertRenewal.sh
 ```
 
 Exits `0` and prints "already up to date, nothing to do" if the installed certificate's fingerprint already matches the vault; otherwise downloads, installs, and reloads.
@@ -49,14 +47,14 @@ crontab -e
 ```
 
 ```cron
-0 0 * * * /usr/bin/bash /home/ladm_bwcadmin/setup.sh >> /var/log/keyvault-cert-renewal.log 2>&1
+0 0 * * * /usr/bin/bash /home/ladm_bwcadmin/Invoke-KeyVaultCertRenewal.sh >> /var/log/keyvault-cert-renewal.log 2>&1
 ```
 
 ### Testing the cron job without waiting
 
 ```bash
 # Run exactly as cron would (no TTY, minimal environment)
-sudo env -i /usr/bin/bash /home/ladm_bwcadmin/setup.sh >> /var/log/keyvault-cert-renewal.log 2>&1; echo "exit: $?"
+sudo env -i /usr/bin/bash /home/ladm_bwcadmin/Invoke-KeyVaultCertRenewal.sh >> /var/log/keyvault-cert-renewal.log 2>&1; echo "exit: $?"
 
 # Confirm cron itself fired the job
 grep CRON /var/log/syslog | tail

@@ -107,4 +107,6 @@ module oidc 'modules/microsoft-graph/applications/federatedIdentityCredentials/m
 
 ---
 
-*Last updated: 2026-07-16*
+### Last updated
+
+2026-08-04

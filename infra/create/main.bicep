@@ -165,8 +165,18 @@ var kvAccessPolicies = [
 @description('Key Vault Base Url for ACME Bot')
 var acmeKeyVaultUrlBase = 'https://${keyvaultName}${environment().suffixes.keyvaultDns}/'
 
-@description('Acmebot Package Uri')
-param acmebotPackageUri string
+@description('Acmebot release tag used to construct the package URI. Use latest, 5.0.0, or v5.0.0.')
+@minLength(1)
+param acmebotReleaseTag string = 'latest'
+
+var normalizedAcmebotReleaseTag = startsWith(toLower(acmebotReleaseTag), 'v')
+  ? acmebotReleaseTag
+  : 'v${acmebotReleaseTag}'
+
+#disable-next-line no-hardcoded-env-urls
+var acmebotPackageUri = toLower(acmebotReleaseTag) == 'latest'
+  ? 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
+  : 'https://github.com/polymind-inc/acmebot/releases/download/${normalizedAcmebotReleaseTag}/acmebot.zip'
 
 @description('Percentage of certificate lifetime remaining before renewal (0-100)')
 @minValue(0)
@@ -297,7 +307,7 @@ module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.3' = 
 }
 
 // Create Entra Security Group - Key Vault Certificate [Get - List]
-module createKeyVaultSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
+module createKeyVaultSecurityGroup '../modules/microsoft-graph/groups/main.bicep' = {
   name: 'create-entra-keyvault-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -317,7 +327,7 @@ module createKeyVaultSecurityGroup 'modules/microsoft-graph/groups/main.bicep' =
 }
 
 // Create Entra Security Group - Enterprise App SSO
-module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
+module createEntraSecurityGroup '../modules/microsoft-graph/groups/main.bicep' = {
   name: 'create-entra-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -337,7 +347,7 @@ module createEntraSecurityGroup 'modules/microsoft-graph/groups/main.bicep' = {
 }
 
 // Create Application Registration
-module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' = {
+module createAppRegistration '../modules/microsoft-graph/applications/main.bicep' = {
   name: 'create-entra-app-registration-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -374,7 +384,7 @@ module createAppRegistration 'modules/microsoft-graph/applications/main.bicep' =
   ]
 }
 
-module createFederatedCredential 'modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
+module createFederatedCredential '../modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
   name: 'create-entra-federated-credential-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -394,7 +404,7 @@ module createFederatedCredential 'modules/microsoft-graph/applications/federated
 }
 
 // Create Enterprise Application
-module createServicePrincipal 'modules/microsoft-graph/servicePrincipals/main.bicep' = {
+module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main.bicep' = {
   name: 'create-entra-service-principal-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -938,7 +948,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
 }
 
 // Deploy Acmebot package from GitHub releases into the Flex Consumption blob container
-module deployFunctionAppPackage 'modules/app/site/extension/main.bicep' = {
+module deployFunctionAppPackage '../modules/app/site/extension/main.bicep' = {
   name: 'deploy-function-app-package-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {

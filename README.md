@@ -2,7 +2,7 @@
 
 Production-ready Infrastructure as Code (IaC) for deploying an ACME-based certificate automation platform on Azure using Bicep.
 
-This solution provisions a secure Function App + Key Vault pattern (with private networking and managed identity) and deploys the latest Acmebot package automatically.
+This solution provisions a secure Function App + Key Vault pattern with private networking and managed identity, and supports both initial platform creation and package-only Acmebot updates.
 
 ---
 
@@ -42,6 +42,12 @@ It is intentionally opinionated toward enterprise-friendly defaults (private end
 - Optional:
   - DNS role assignments for Public/Private DNS
 
+## Deployment flow
+
+- `infra/create/` provisions the full platform and deploys Acmebot during the initial build
+- `infra/update/` redeploys only the Acmebot package into an existing Function App
+- Both flows use the same `acmebotReleaseTag` convention: `latest`, `5.0.0`, or `v5.0.0`
+
 ---
 
 ## High-level architecture
@@ -65,15 +71,27 @@ flowchart LR
 .
 ├─ README.md
 ├─ infra/
-│  ├─ main.bicep
-│  ├─ param.main.bicepparam
-│  ├─ Invoke-AzDeployment.ps1
 │  ├─ bicepconfig.json
+│  ├─ create/
+│  │  ├─ README.md
+│  │  ├─ Invoke-AzDeployment.ps1
+│  │  ├─ main.bicep
+│  │  └─ param.main.bicepparam
+│  ├─ update/
+│  │  ├─ README.md
+│  │  ├─ Invoke-AzDeployment.ps1
+│  │  ├─ main.bicep
+│  │  └─ param.main.bicepparam
 │  └─ modules/
 │     ├─ app/site/extension/
 │     └─ microsoft-graph/
 └─ scripts/
-   └─ Invoke-CertificateRenewal.ps1
+  ├─ linux/
+  │  ├─ README.md
+  │  └─ Invoke-KeyVaultCertRenewal.sh
+  └─ windows/
+    ├─ README.md
+    └─ Invoke-KeyVaultCertRenewal.ps1
 ```
 
 ---
@@ -87,7 +105,7 @@ flowchart LR
 - Azure CLI + Bicep CLI
 - PowerShell 7+
 
-### 1) Review `infra/param.main.bicepparam`
+### 1) Review `infra/create/param.main.bicepparam`
 
 Key settings to validate first:
 
@@ -100,6 +118,9 @@ Key settings to validate first:
 - `acmeBotRenewBeforeExpiry` (percentage of certificate lifetime remaining, 0–100, default 30)
 - `acmeBotUseSystemNameServer` (default `false`, useful for private DNS resolver scenarios)
 - `virtualNetworkSubnetAppService` (must be at least `/27` for Flex Consumption)
+- `acmebotReleaseTag` (shared by create/update; set `latest` or a pinned version like `5.0.0`)
+
+For package redeployments, see `infra/update/Invoke-AzDeployment.ps1` and `infra/update/param.main.bicepparam`; the same `acmebotReleaseTag` convention applies.
 
 Supported ACME endpoints in this template:
 
@@ -113,7 +134,7 @@ Supported ACME endpoints in this template:
 
 ### 2) Deploy
 
-Run from `infra/`:
+Run from `infra/create/`:
 
 ```powershell
 .\Invoke-AzDeployment.ps1 `
@@ -161,26 +182,31 @@ az functionapp config appsettings list -g <resource-group> -n <function-app-name
 
 ## Known design choices in this repo
 
-- This repo deploys latest release asset from GitHub using `onedeploy
+- This repo deploys the latest release asset from GitHub using `onedeploy`.
 - DNS role assignment modules support cross-subscription scopes via explicit subscription parameters
 - The baseline is tuned for Azure public cloud and Acmebot v5 behavior
 - Key Vault uses Access Policies (not RBAC) to preserve compatibility with Application Gateway certificate integration
 - Key Vault soft delete and purge protection are enabled with a 90-day retention period; purge protection cannot be disabled after activation
 - NSG is only created when `enableCreateVirtualNetwork = true`; when using an existing VNet, NSG management is assumed to be handled by the existing network
+- `dependsOn` helpers are intentionally retained for readability and the linter rule is disabled in `infra/bicepconfig.json`
 
 ---
 
 ## Related docs in this repository
 
+- `infra/create/README.md`
+- `infra/update/README.md`
 - `infra/modules/app/site/extension/README.md`
 - `infra/modules/microsoft-graph/readme.md`
 - `infra/modules/microsoft-graph/*/README.md`
+- `scripts/linux/README.md`
+- `scripts/windows/README.md`
 
 ---
 
 ## Upstream references
 
-- Acmebot project: https://github.com/polymind-inc/acmebot
-- Acmebot docs: https://acmebot.dev/guide/
-- Acmebot configuration reference: https://acmebot.dev/reference/configuration
-- Azure Bicep docs: https://learn.microsoft.com/azure/azure-resource-manager/bicep/
+- Acmebot project: [polymind-inc/acmebot](https://github.com/polymind-inc/acmebot)
+- Acmebot docs: [Acmebot guide](https://acmebot.dev/guide/)
+- Acmebot configuration reference: [Acmebot configuration reference](https://acmebot.dev/reference/configuration)
+- Azure Bicep docs: [Azure Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
