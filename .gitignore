@@ -1,0 +1,3 @@
+# Compiled Bicep output for the deployment entrypoints (build artifacts, not versioned)
+/infra/create/main.json
+/infra/update/main.json
