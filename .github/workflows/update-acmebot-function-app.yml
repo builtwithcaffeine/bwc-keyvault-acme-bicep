@@ -97,6 +97,11 @@ jobs:
               echo "postDeployState=${state}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            if [ -z "$state" ]; then
+              echo "Function App state is not reported by the Flex Consumption API; continuing to smoke test."
+              echo "postDeployState=Not reported (Flex Consumption)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             sleep 10
           done
           echo "::error::Function App did not reach 'Running' state within the timeout window."
