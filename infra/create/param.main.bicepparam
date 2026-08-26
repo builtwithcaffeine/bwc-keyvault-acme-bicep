@@ -52,7 +52,6 @@ param azurePrivateDnsZones = [
 // Set this to 'latest', '5.0.0', or 'v5.0.0' when you want to pin a release.
 param acmebotReleaseTag = '5.0.0'
 
-
 // @description('ACME Azure Public DNS Subscription ID')
 param acmeAzurePublicDnsSubscriptionId = subscriptionId
 
@@ -73,3 +72,19 @@ param acmeEnvironment = 'AzureCloud'
 
 // @description('ACME Contacts Email Address')
 param acmeContacts = 'alerts@builtwithcaffeine.cloud'
+
+//
+// GitHub Actions OIDC Federation - Acmebot Managed Identity
+// Enable to let GitHub Actions workflows (e.g. update-acmebot-function-app.yml) authenticate via the
+// Acmebot managed identity's client-id/tenant-id, with no client secret required.
+param enableGitHubActionsFederation = true
+
+// Optional: use GitHub's immutable owner/repo IDs so the credential survives renames/transfers.
+// For Windows: winget install --id 'GitHub.cli'
+// CLI Authentication: gh auth login
+// Find them via: gh api repos/{owner}/{repo} --jq '.id, .owner.id'
+param gitHubRepositoryId = '905440910'
+param gitHubRepositoryOwnerId = '141853123'
+param gitHubFederationSubjectType = 'branch'
+param gitHubFederationSubjectValue = 'main'
+param gitHubRepository = 'builtwithcaffeine/bwc-keyvault-acme-bicep'

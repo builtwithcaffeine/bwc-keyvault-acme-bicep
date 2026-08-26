@@ -10,7 +10,8 @@ metadata owner = 'Platform Team'
 @description('Required. Application ID of the application to create service principal for')
 param appId string
 
-@description('Optional. Display name for the service principal')
+@description('Optional. Display name for the service principal. Not sent to Microsoft Graph - the service principal always inherits displayName from its linked application. Retained for interface compatibility.')
+#disable-next-line no-unused-params
 param displayName string = ''
 
 @description('Optional. Whether the service principal account is enabled')
@@ -102,9 +103,10 @@ var ownersConfig = {
 extension microsoftGraphV1
 
 @description('Microsoft Graph Service Principal')
+// displayName is intentionally not set here - Graph inherits it from the linked application
+// and rejects any explicit value (including null) that does not already match.
 resource servicePrincipal 'Microsoft.Graph/servicePrincipals@v1.0' = {
   appId: appId
-  displayName: !empty(displayName) ? displayName : null
   accountEnabled: accountEnabled
   addIns: addIns
   alternativeNames: alternativeNames

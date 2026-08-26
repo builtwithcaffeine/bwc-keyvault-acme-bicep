@@ -71,9 +71,6 @@ var appServicePlanName = 'asp-${customerName}-kvacme-${environmentType}-${locati
 // Function App Name
 var functionAppName = 'func-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// App Registration Name
-var appRegistrationName = 'sp-${customerName}-kvacme-authentication-${environmentType}'
-
 //
 // Parameters [Existing Resources]
 // Imported from parameters file or passed in at deployment time
@@ -228,6 +225,41 @@ param acmeEnvironment string
 @description('Key Vault ACME - Email Contact(s)')
 param acmeContacts string
 
+// GitHub Actions OIDC Federation - Acmebot Managed Identity
+
+@description('Enable a GitHub Actions federated identity credential on the Acmebot managed identity (userManagedIdentityArray[0]), so workflows can authenticate to Azure without secrets.')
+param enableGitHubActionsFederation bool = false
+
+@description('GitHub repository in "owner/repo" format used for the federated credential subject')
+param gitHubRepository string = ''
+
+@description('Immutable numeric GitHub owner Id. When supplied together with gitHubRepositoryId, the federated credential subject uses GitHub\'s immutable "owner@ownerId/repo@repoId" format, which is not affected by repository renames/transfers. See https://learn.microsoft.com/entra/workload-id/workload-identities-github-immutable-subjects')
+param gitHubRepositoryOwnerId string = ''
+
+@description('Immutable numeric GitHub repository Id. See gitHubRepositoryOwnerId.')
+param gitHubRepositoryId string = ''
+
+@description('GitHub Actions federation subject type used to scope the credential')
+@allowed(['branch', 'environment', 'pull_request', 'tag'])
+param gitHubFederationSubjectType string = 'branch'
+
+@description('Branch, environment, or tag name used to build the federation subject (ignored for pull_request)')
+param gitHubFederationSubjectValue string = 'main'
+
+var gitHubRepositoryParts = split(gitHubRepository, '/')
+var useImmutableGitHubSubject = !empty(gitHubRepositoryOwnerId) && !empty(gitHubRepositoryId)
+var gitHubFederationRepository = useImmutableGitHubSubject
+  ? '${gitHubRepositoryParts[0]}@${gitHubRepositoryOwnerId}/${gitHubRepositoryParts[1]}@${gitHubRepositoryId}'
+  : gitHubRepository
+
+var gitHubFederationSubject = gitHubFederationSubjectType == 'branch'
+  ? 'repo:${gitHubFederationRepository}:ref:refs/heads/${gitHubFederationSubjectValue}'
+  : gitHubFederationSubjectType == 'tag'
+      ? 'repo:${gitHubFederationRepository}:ref:refs/tags/${gitHubFederationSubjectValue}'
+      : gitHubFederationSubjectType == 'environment'
+          ? 'repo:${gitHubFederationRepository}:environment:${gitHubFederationSubjectValue}'
+          : 'repo:${gitHubFederationRepository}:pull_request'
+
 @description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
   'privatelink.vaultcore.azure.net'                       // [0]
@@ -351,8 +383,8 @@ module createAppRegistration '../modules/microsoft-graph/applications/main.bicep
   name: 'create-entra-app-registration-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
-    appName: appRegistrationName
-    displayName: 'Key Vault ACME - Authentication - ${environmentType}'
+    appName: 'app-${customerName}-kvacme-authentication-${environmentType}'
+    displayName: 'Key Vault ACME - Authentication - ${toUpper(environmentType)}'
     appDescription: 'App Registration for Key Vault ACME'
     homePageUrl: 'https://${functionAppName}.azurewebsites.net'
     webRedirectUris: [
@@ -409,7 +441,8 @@ module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main
   scope: resourceGroup(resourceGroupName)
   params: {
     appId: createAppRegistration.outputs.applicationId
-    displayName: 'Key Vault ACME - Authentication - ${toUpper(environmentType)}'
+    // displayName intentionally omitted - Graph requires it to exactly match the linked
+    // application's displayName, so it inherits from createAppRegistration automatically.
     homepage: 'https://${functionAppName}.azurewebsites.net'
     accountEnabled: true
     appRoleAssignmentRequired: true
@@ -435,6 +468,22 @@ module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assign
     ]
   }
 ]
+
+// GitHub Actions OIDC federation on the Acmebot managed identity - lets workflows (e.g. update-acmebot-function-app.yml) authenticate without a client secret
+module createGitHubActionsFederatedCredential '../modules/identity/federatedIdentityCredential/main.bicep' = if (enableGitHubActionsFederation) {
+  name: 'create-github-actions-federated-credential-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    userAssignedIdentityName: userManagedIdentityArray[0]
+    name: 'github-action-federation-${gitHubFederationSubjectType}'
+    issuer: 'https://token.actions.githubusercontent.com'
+    subject: gitHubFederationSubject
+  }
+  dependsOn: [
+    createUserManagedIdentity
+  ]
+}
+
 
 module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (enableCreateVirtualNetwork) {
   name: 'create-network-security-group-${locationShortCode}'
@@ -989,3 +1038,9 @@ module roleAssignmentPrivateDnsZone 'br/public:avm/ptn/authorization/resource-ro
     ]
   }
 ]
+
+// GitHub Actions federation values - surfaced so the deployment wrapper script can print the AZURE_CLIENT_ID / AZURE_TENANT_ID secrets to configure
+output gitHubActionsFederationEnabled bool = enableGitHubActionsFederation
+output gitHubActionsFederationClientId string = createUserManagedIdentity[0].outputs.clientId
+output gitHubActionsFederationTenantId string = tenantId
+output gitHubActionsFederationSubject string = enableGitHubActionsFederation ? gitHubFederationSubject : ''
