@@ -3,12 +3,12 @@ name: Update Acmebot Function App
 on:
   workflow_dispatch:
     inputs:
-      functionAppName:
-        description: 'Existing Acmebot Function App name'
+      subscriptionId:
+        description: 'Azure Subscription Id'
         required: true
         type: string
-      subscriptionId:
-        description: 'Azure Subscription Id containing the Function App'
+      functionAppName:
+        description: 'Existing Acmebot Function App name'
         required: true
         type: string
       version:
