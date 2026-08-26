@@ -17,7 +17,7 @@ var releaseTag = toLower(acmebotReleaseTag) == 'latest'
   : normalizedReleaseTag
 
 #disable-next-line no-hardcoded-env-urls
-var appPackageUri = 'https://github.com/polymind-inc/acmebot/releases/${releaseTag}/download/acmebot.zip'
+var appPackageUri = 'https://github.com/polymind-inc/acmebot/releases/download/${releaseTag}/acmebot.zip'
 
 module deployFunctionAppPackage '../modules/app/site/extension/main.bicep' = {
   scope: resourceGroup()
