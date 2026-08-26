@@ -1,0 +1,79 @@
+name: Check Acmebot Release
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Daily at 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  ACMEBOT_REPO: polymind-inc/acmebot
+  PARAM_FILE: infra/create/param.main.bicepparam
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Get latest Acmebot release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api "repos/${ACMEBOT_REPO}/releases/latest" --jq '.tag_name')
+          version="${tag#v}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Get current pinned version
+        id: current
+        run: |
+          current=$(grep -oP "(?<=param acmebotReleaseTag = ')[^']+" "$PARAM_FILE")
+          echo "version=${current}" >> "$GITHUB_OUTPUT"
+
+      - name: Compare versions
+        id: compare
+        run: |
+          if [ "${{ steps.latest.outputs.version }}" != "${{ steps.current.outputs.version }}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update bicepparam file
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          sed -i "s/param acmebotReleaseTag = '${{ steps.current.outputs.version }}'/param acmebotReleaseTag = '${{ steps.latest.outputs.version }}'/" "$PARAM_FILE"
+
+      - name: Update changelog
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          entry="## ${{ steps.latest.outputs.tag }} - $(date -u +%Y-%m-%d)\n\n- Bumped \`acmebotReleaseTag\` from \`${{ steps.current.outputs.version }}\` to \`${{ steps.latest.outputs.version }}\`.\n- [Release notes](https://github.com/${ACMEBOT_REPO}/releases/tag/${{ steps.latest.outputs.tag }})\n"
+          tmpfile=$(mktemp)
+          { head -n 4 CHANGELOG.md; echo -e "\n${entry}"; tail -n +5 CHANGELOG.md; } > "$tmpfile"
+          mv "$tmpfile" CHANGELOG.md
+
+      - name: Create pull request
+        if: steps.compare.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: bump acmebotReleaseTag to ${{ steps.latest.outputs.version }}"
+          title: "chore: bump Acmebot release to ${{ steps.latest.outputs.tag }}"
+          body: |
+            A new Acmebot release was published: [${{ steps.latest.outputs.tag }}](https://github.com/${{ env.ACMEBOT_REPO }}/releases/tag/${{ steps.latest.outputs.tag }})
+
+            This PR updates the pinned `acmebotReleaseTag` in `${{ env.PARAM_FILE }}` from `${{ steps.current.outputs.version }}` to `${{ steps.latest.outputs.version }}`.
+
+            `CHANGELOG.md` has been updated with this release entry.
+
+            Please review the [release notes](https://github.com/${{ env.ACMEBOT_REPO }}/releases/tag/${{ steps.latest.outputs.tag }}) before merging.
+          branch: chore/acmebot-${{ steps.latest.outputs.version }}
+          delete-branch: true
+          labels: dependencies
+          assignees: smoonlee
