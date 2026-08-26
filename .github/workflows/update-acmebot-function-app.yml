@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       subscriptionId:
-        description: 'Azure Subscription Id'
-        required: true
-        type: string
-      functionAppName:
-        description: 'Existing Acmebot Function App name'
+        description: 'Azure Subscription Id:'
         required: true
         type: string
       resourceGroupName:
-        description: 'Resource group containing the Function App'
+        description: 'Resource Group Name:'
+        required: true
+        type: string
+      functionAppName:
+        description: 'Function App Name:'
         required: true
         type: string
       version:
