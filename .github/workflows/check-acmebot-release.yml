@@ -65,8 +65,8 @@ jobs:
       - name: Build & validate Bicep templates
         if: steps.compare.outputs.changed == 'true'
         run: |
-          az bicep build --file infra/create/main.bicep
-          az bicep build --file infra/update/main.bicep
+          az bicep build --file infra/create/main.bicep --outfile /tmp/create.main.json
+          az bicep build --file infra/update/main.bicep --outfile /tmp/update.main.json
 
       - name: Create pull request
         if: steps.compare.outputs.changed == 'true'
@@ -104,7 +104,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.PR_APPROVE_APP_CLIENT_ID }}
+          client-id: ${{ secrets.PR_APPROVE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PR_APPROVE_APP_PRIVATE_KEY }}
 
       - name: Auto-approve pull request
