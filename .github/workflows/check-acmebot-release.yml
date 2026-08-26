@@ -63,8 +63,8 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: bump acmebotReleaseTag to ${{ steps.latest.outputs.version }}"
-          title: "chore: bump Acmebot release to ${{ steps.latest.outputs.tag }}"
+          commit-message: "[GitHub Bot]: bump acmebotReleaseTag to ${{ steps.latest.outputs.version }}"
+          title: "[GitHub Bot]: bump Acmebot release to ${{ steps.latest.outputs.tag }}"
           body: |
             A new Acmebot release was published: [${{ steps.latest.outputs.tag }}](https://github.com/${{ env.ACMEBOT_REPO }}/releases/tag/${{ steps.latest.outputs.tag }})
 
@@ -73,7 +73,7 @@ jobs:
             `CHANGELOG.md` has been updated with this release entry.
 
             Please review the [release notes](https://github.com/${{ env.ACMEBOT_REPO }}/releases/tag/${{ steps.latest.outputs.tag }}) before merging.
-          branch: chore/acmebot-${{ steps.latest.outputs.version }}
+          branch: update/acmebot-${{ steps.latest.outputs.version }}
           delete-branch: true
           labels: dependencies
           assignees: smoonlee
