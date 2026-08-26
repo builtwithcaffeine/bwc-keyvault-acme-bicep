@@ -11,6 +11,12 @@ Tracks `acmebotReleaseTag` version bumps applied to [infra/create/param.main.bic
 
 ## v5.1.4 - 2026-08-26
 
+- Bumped `acmebotReleaseTag` from `5.0.0` to `5.1.4`.
+- [Release notes](https://github.com/polymind-inc/acmebot/releases/tag/v5.1.4)
+
+
+## v5.1.4 - 2026-08-26
+
 - Bumped `acmebotReleaseTag` from `5.1.0` to `5.1.4`.
 - [Release notes](https://github.com/polymind-inc/acmebot/releases/tag/v5.1.4)
 
