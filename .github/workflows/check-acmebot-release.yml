@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '0 6 * * *' # Daily at 06:00 UTC
   workflow_dispatch: {}
+  pull_request:
+    types: [closed]
 
 concurrency:
   group: check-acmebot-release
@@ -19,6 +21,7 @@ env:
 
 jobs:
   check-acmebot-release:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -136,3 +139,21 @@ jobs:
         run: |
           set -euo pipefail
           gh pr review "${{ steps.cpr.outputs.pull-request-number }}" --approve --repo "${{ github.repository }}"
+
+  delete-merged-acmebot-branch:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'update/acmebot-') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged Acmebot branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
+          echo "Deleted merged branch: ${BRANCH}"
