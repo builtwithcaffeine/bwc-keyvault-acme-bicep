@@ -11,6 +11,10 @@ on:
         description: 'Existing Acmebot Function App name'
         required: true
         type: string
+      resourceGroupName:
+        description: 'Resource group containing the Function App'
+        required: true
+        type: string
       version:
         description: "Acmebot version to deploy (e.g. 5.0.0)."
         required: false
@@ -60,12 +64,7 @@ jobs:
         id: preflight
         run: |
           set -euo pipefail
-          appJson=$(az resource list --subscription "${{ inputs.subscriptionId }}" --resource-type 'Microsoft.Web/sites' --name "${{ inputs.functionAppName }}" --output json)
-          resourceGroup=$(echo "$appJson" | jq -r '.[0].resourceGroup // empty')
-          if [[ -z "$resourceGroup" ]]; then
-            echo "::error::Function App '${{ inputs.functionAppName }}' was not found in subscription '${{ inputs.subscriptionId }}'."
-            exit 1
-          fi
+          resourceGroup="${{ inputs.resourceGroupName }}"
 
           state=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "state" --output tsv)
           hostName=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "defaultHostName" --output tsv)
