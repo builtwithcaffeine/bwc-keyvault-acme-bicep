@@ -1,0 +1,141 @@
+name: Update Acmebot Function App
+
+on:
+  workflow_dispatch:
+    inputs:
+      functionAppName:
+        description: 'Existing Acmebot Function App name'
+        required: true
+        type: string
+      subscriptionId:
+        description: 'Azure Subscription Id containing the Function App'
+        required: true
+        type: string
+      version:
+        description: "Acmebot version to deploy (e.g. 5.1.4). Leave empty to use whatever is currently pinned in infra/create/param.main.bicepparam (kept at latest by the Check Acmebot Release workflow) - set a specific version here to roll back."
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  PARAM_FILE: infra/create/param.main.bicepparam
+  UPDATE_TEMPLATE: infra/update/main.bicep
+
+jobs:
+  update-function-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve target version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.version }}" ]; then
+            resolved=$(grep -oP "(?<=^param acmebotReleaseTag = ')[^']+" "$PARAM_FILE")
+            if [[ -z "$resolved" ]]; then
+              echo "::error::Could not resolve acmebotReleaseTag from ${PARAM_FILE}"
+              exit 1
+            fi
+            echo "Resolved empty input to pinned version: ${resolved}"
+          else
+            resolved="${{ inputs.version }}"
+            echo "Using explicitly provided version: ${resolved}"
+          fi
+          echo "version=${resolved}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login (OIDC federated)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ inputs.subscriptionId }}
+
+      - name: Check Function App status & resolve resource group
+        id: preflight
+        run: |
+          set -euo pipefail
+          appJson=$(az resource list --subscription "${{ inputs.subscriptionId }}" --resource-type 'Microsoft.Web/sites' --name "${{ inputs.functionAppName }}" --output json)
+          resourceGroup=$(echo "$appJson" | jq -r '.[0].resourceGroup // empty')
+          if [[ -z "$resourceGroup" ]]; then
+            echo "::error::Function App '${{ inputs.functionAppName }}' was not found in subscription '${{ inputs.subscriptionId }}'."
+            exit 1
+          fi
+
+          state=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "state" --output tsv)
+          hostName=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "defaultHostName" --output tsv)
+
+          echo "Function App '${{ inputs.functionAppName }}' found in resource group '${resourceGroup}' (state: ${state})"
+
+          echo "resourceGroup=${resourceGroup}" >> "$GITHUB_OUTPUT"
+          echo "preDeployState=${state}" >> "$GITHUB_OUTPUT"
+          echo "hostName=${hostName}" >> "$GITHUB_OUTPUT"
+
+      - name: Run update deployment
+        id: deploy
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --subscription "${{ inputs.subscriptionId }}" \
+            --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
+            --template-file "$UPDATE_TEMPLATE" \
+            --parameters functionAppName="${{ inputs.functionAppName }}" acmebotReleaseTag="${{ steps.version.outputs.version }}" \
+            --name "acmebot-update-${{ steps.version.outputs.version }}-${{ github.run_id }}"
+
+      - name: Wait for Function App to come back online
+        id: wait
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            state=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "${{ steps.preflight.outputs.resourceGroup }}" --name "${{ inputs.functionAppName }}" --query "state" --output tsv)
+            echo "Attempt ${attempt}/30: Function App state = ${state}"
+            if [ "$state" = "Running" ]; then
+              echo "postDeployState=${state}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Function App did not reach 'Running' state within the timeout window."
+          exit 1
+
+      - name: Smoke test
+        id: smoke
+        run: |
+          set -euo pipefail
+          url="https://${{ steps.preflight.outputs.hostName }}"
+          for attempt in $(seq 1 10); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$url" || echo "000")
+            echo "Attempt ${attempt}/10: ${url} responded with HTTP ${status}"
+            if [[ "$status" =~ ^[23] ]] || [ "$status" = "401" ] || [ "$status" = "403" ]; then
+              echo "result=passed (HTTP ${status})" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "result=failed" >> "$GITHUB_OUTPUT"
+          echo "::error::Smoke test failed - ${url} did not return a healthy response."
+          exit 1
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Acmebot Function App Update"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Function App | ${{ inputs.functionAppName }} |"
+            echo "| Subscription | ${{ inputs.subscriptionId }} |"
+            echo "| Resource Group | ${{ steps.preflight.outputs.resourceGroup }} |"
+            echo "| Requested Version | ${{ inputs.version }} |"
+            echo "| Deployed Version | ${{ steps.version.outputs.version }} |"
+            echo "| State Before | ${{ steps.preflight.outputs.preDeployState }} |"
+            echo "| State After | ${{ steps.wait.outputs.postDeployState }} |"
+            echo "| Smoke Test | ${{ steps.smoke.outputs.result }} |"
+            echo "| Deployment Job | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
