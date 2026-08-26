@@ -5,6 +5,10 @@ on:
     - cron: '0 6 * * *' # Daily at 06:00 UTC
   workflow_dispatch: {}
 
+concurrency:
+  group: check-acmebot-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -25,7 +29,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           tag=$(gh api "repos/${ACMEBOT_REPO}/releases/latest" --jq '.tag_name')
+          if [[ ! "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected or empty tag_name from GitHub API: '${tag}'"
+            exit 1
+          fi
           version="${tag#v}"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -33,7 +42,12 @@ jobs:
       - name: Get current pinned version
         id: current
         run: |
-          current=$(grep -oP "(?<=param acmebotReleaseTag = ')[^']+" "$PARAM_FILE")
+          set -euo pipefail
+          current=$(grep -oP "(?<=^param acmebotReleaseTag = ')[^']+" "$PARAM_FILE")
+          if [[ -z "$current" ]]; then
+            echo "::error::Could not find acmebotReleaseTag in ${PARAM_FILE}"
+            exit 1
+          fi
           echo "version=${current}" >> "$GITHUB_OUTPUT"
 
       - name: Compare versions
@@ -48,11 +62,14 @@ jobs:
       - name: Update bicepparam file
         if: steps.compare.outputs.changed == 'true'
         run: |
-          sed -i "s/param acmebotReleaseTag = '${{ steps.current.outputs.version }}'/param acmebotReleaseTag = '${{ steps.latest.outputs.version }}'/" "$PARAM_FILE"
+          set -euo pipefail
+          sed -i "s/^param acmebotReleaseTag = '${{ steps.current.outputs.version }}'$/param acmebotReleaseTag = '${{ steps.latest.outputs.version }}'/" "$PARAM_FILE"
+          grep -qF "param acmebotReleaseTag = '${{ steps.latest.outputs.version }}'" "$PARAM_FILE"
 
       - name: Update changelog
         if: steps.compare.outputs.changed == 'true'
         run: |
+          set -euo pipefail
           entry="## ${{ steps.latest.outputs.tag }} - $(date -u +%Y-%m-%d)\n\n- Bumped \`acmebotReleaseTag\` from \`${{ steps.current.outputs.version }}\` to \`${{ steps.latest.outputs.version }}\`.\n- [Release notes](https://github.com/${ACMEBOT_REPO}/releases/tag/${{ steps.latest.outputs.tag }})\n"
           tmpfile=$(mktemp)
           { head -n 4 CHANGELOG.md; echo -e "\n${entry}"; tail -n +5 CHANGELOG.md; } > "$tmpfile"
@@ -65,8 +82,11 @@ jobs:
       - name: Build & validate Bicep templates
         if: steps.compare.outputs.changed == 'true'
         run: |
+          set -euo pipefail
           az bicep build --file infra/create/main.bicep --outfile /tmp/create.main.json
+          echo "✅ infra/create/main.bicep built successfully"
           az bicep build --file infra/update/main.bicep --outfile /tmp/update.main.json
+          echo "✅ infra/update/main.bicep built successfully"
 
       - name: Create pull request
         if: steps.compare.outputs.changed == 'true'
@@ -87,7 +107,6 @@ jobs:
           branch: update/acmebot-${{ steps.latest.outputs.version }}
           delete-branch: true
           labels: dependencies
-          assignees: smoonlee
           reviewers: smoonlee
 
       - name: Enable auto-merge
@@ -95,6 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           gh pr merge "${{ steps.cpr.outputs.pull-request-number }}" --auto --squash --repo "${{ github.repository }}"
 
       - name: Generate approval token
@@ -106,10 +126,13 @@ jobs:
         with:
           client-id: ${{ secrets.PR_APPROVE_APP_CLIENT_ID }}
           private-key: ${{ secrets.PR_APPROVE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
 
       - name: Auto-approve pull request
         if: steps.compare.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          set -euo pipefail
           gh pr review "${{ steps.cpr.outputs.pull-request-number }}" --approve --repo "${{ github.repository }}"
