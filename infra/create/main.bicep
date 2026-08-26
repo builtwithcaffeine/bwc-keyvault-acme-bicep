@@ -469,6 +469,8 @@ module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assign
   }
 ]
 
+
+
 // GitHub Actions OIDC federation on the Acmebot managed identity - lets workflows (e.g. update-acmebot-function-app.yml) authenticate without a client secret
 module createGitHubActionsFederatedCredential '../modules/identity/federatedIdentityCredential/main.bicep' = if (enableGitHubActionsFederation) {
   name: 'create-github-actions-federated-credential-${locationShortCode}'
