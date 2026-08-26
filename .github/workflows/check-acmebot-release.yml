@@ -18,7 +18,7 @@ env:
   PARAM_FILE: infra/create/param.main.bicepparam
 
 jobs:
-  check-release:
+  check-acmebot-release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

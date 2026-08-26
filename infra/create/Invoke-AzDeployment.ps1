@@ -75,15 +75,15 @@ param (
 
   [Parameter(Mandatory = $true, Position = 6, HelpMessage = "Azure Location is required")]
   [ValidateSet("eastus", "eastus2", "westus", "westus2", "westus3", "centralus", "northcentralus",
-  "southcentralus", "westcentralus", "canadacentral", "canadaeast", "brazilsouth", "brazilsoutheast",
-  "northeurope", "westeurope", "uksouth", "ukwest", "swedencentral", "francecentral", "francesouth",
-  "germanywestcentral", "germanynorth", "switzerlandnorth", "switzerlandwest", "norwayeast", "norwaywest",
-  "polandcentral", "spaincentral", "qatarcentral", "uaenorth", "uaecentral", "southafricanorth",
-  "southafricawest", "eastasia", "southeastasia", "japaneast", "japanwest",
-  "australiaeast", "australiasoutheast", "australiacentral", "australiacentral2", "centralindia",
-  "southindia", "westindia", "koreacentral", "koreasouth", "indonesiacentral",
-  "malaysiawest", "newzealandnorth", "chilecentral", "israelcentral", "mexicocentral",
-  "austriaeast", "belgiumcentral", "denmarkeast", "italynorth")]
+    "southcentralus", "westcentralus", "canadacentral", "canadaeast", "brazilsouth", "brazilsoutheast",
+    "northeurope", "westeurope", "uksouth", "ukwest", "swedencentral", "francecentral", "francesouth",
+    "germanywestcentral", "germanynorth", "switzerlandnorth", "switzerlandwest", "norwayeast", "norwaywest",
+    "polandcentral", "spaincentral", "qatarcentral", "uaenorth", "uaecentral", "southafricanorth",
+    "southafricawest", "eastasia", "southeastasia", "japaneast", "japanwest",
+    "australiaeast", "australiasoutheast", "australiacentral", "australiacentral2", "centralindia",
+    "southindia", "westindia", "koreacentral", "koreasouth", "indonesiacentral",
+    "malaysiawest", "newzealandnorth", "chilecentral", "israelcentral", "mexicocentral",
+    "austriaeast", "belgiumcentral", "denmarkeast", "italynorth")]
   [string] $location,
 
   [Parameter(Mandatory = $false, Position = 7, HelpMessage = "Execute Infrastructure Deployment")]
@@ -664,16 +664,16 @@ if ($deploy) {
     $azDeployGuidLink = "`e]8;;https://portal.azure.com/#view/HubsExtension/DeploymentDetailsBlade/~/overview/id/$encodedPath`e\$deployName`e]8;;`e\"
 
     $deployParams = @(
-    '--name', $deployName,
-    '--location', $location,
-    '--template-file', $templateFile,
-    '--parameters', './param.main.bicepparam',
-    '--parameters',
-    "location=$location",
-    "locationShortCode=$($locationShortCodeMap.$location)",
-    "customerName=$customerName",
-    "environmentType=$environmentType",
-    "deployedBy=$azIdentityName"
+      '--name', $deployName,
+      '--location', $location,
+      '--template-file', $templateFile,
+      '--parameters', './param.main.bicepparam',
+      '--parameters',
+      "location=$location",
+      "locationShortCode=$($locationShortCodeMap.$location)",
+      "customerName=$customerName",
+      "environmentType=$environmentType",
+      "deployedBy=$azIdentityName"
     )
 
     # Add scope-specific arguments
@@ -705,5 +705,22 @@ if ($deploy) {
     $deployEndTime = Get-Date
     $deploymentDuration = $deployEndTime - $deployStartTime
     Write-Host "> Deployment [$azDeployGuidLink] Completed at $($deployEndTime.ToString('HH:mm:ss')) - Duration: $($deploymentDuration.ToString('hh\:mm\:ss'))"
+
+    # Fetch deployment outputs to surface GitHub Actions federation configuration values
+    $deployOutputsJson = az deployment $targetScope show --name $deployName --query 'properties.outputs' --output json 2>$null
+    if ($LASTEXITCODE -eq 0 -and $deployOutputsJson) {
+      $deployOutputs = $deployOutputsJson | ConvertFrom-Json
+      if ($deployOutputs.gitHubActionsFederationEnabled.value -eq $true) {
+        Write-Host ""
+        Write-Host "> GitHub Actions OIDC Federation - configure these in the target repository:"
+        Write-Host "  Secret AZURE_CLIENT_ID.......: $($deployOutputs.gitHubActionsFederationClientId.value)"
+        Write-Host "  Secret AZURE_TENANT_ID.......: $($deployOutputs.gitHubActionsFederationTenantId.value)"
+        Write-Host "  Workflow input subscriptionId: $subscriptionId"
+        Write-Host "  Federated credential subject.: $($deployOutputs.gitHubActionsFederationSubject.value)"
+        Write-Host ""
+      }
+    } else {
+      Write-Warning "Could not retrieve deployment outputs to display GitHub Actions federation values."
+    }
   }
 }
