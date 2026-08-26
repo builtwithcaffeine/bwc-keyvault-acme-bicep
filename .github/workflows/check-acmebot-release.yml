@@ -58,8 +58,19 @@ jobs:
           { head -n 4 CHANGELOG.md; echo -e "\n${entry}"; tail -n +5 CHANGELOG.md; } > "$tmpfile"
           mv "$tmpfile" CHANGELOG.md
 
+      - name: Setup Bicep CLI
+        if: steps.compare.outputs.changed == 'true'
+        run: az bicep install
+
+      - name: Build & validate Bicep templates
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          az bicep build --file infra/create/main.bicep
+          az bicep build --file infra/update/main.bicep
+
       - name: Create pull request
         if: steps.compare.outputs.changed == 'true'
+        id: cpr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -72,8 +83,33 @@ jobs:
 
             `CHANGELOG.md` has been updated with this release entry.
 
-            Please review the [release notes](https://github.com/${{ env.ACMEBOT_REPO }}/releases/tag/${{ steps.latest.outputs.tag }}) before merging.
+            The Bicep templates were successfully built against this version, so this PR will auto-merge once required checks pass.
           branch: update/acmebot-${{ steps.latest.outputs.version }}
           delete-branch: true
           labels: dependencies
           assignees: smoonlee
+          reviewers: smoonlee
+
+      - name: Enable auto-merge
+        if: steps.compare.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "${{ steps.cpr.outputs.pull-request-number }}" --auto --squash --repo "${{ github.repository }}"
+
+      - name: Generate approval token
+        # A dedicated GitHub App (installed on this repo) provides a bot identity distinct
+        # from github-actions[bot], since GitHub blocks an actor from approving its own PR.
+        if: steps.compare.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.PR_APPROVE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PR_APPROVE_APP_PRIVATE_KEY }}
+
+      - name: Auto-approve pull request
+        if: steps.compare.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr review "${{ steps.cpr.outputs.pull-request-number }}" --approve --repo "${{ github.repository }}"
