@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       version:
-        description: "Acmebot version to deploy (e.g. 5.1.4). Leave empty to use whatever is currently pinned in infra/create/param.main.bicepparam (kept at latest by the Check Acmebot Release workflow) - set a specific version here to roll back."
+        description: "Acmebot version to deploy (e.g. 5.0.0)."
         required: false
         type: string
         default: ''
