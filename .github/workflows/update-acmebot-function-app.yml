@@ -184,7 +184,7 @@ jobs:
             --template-file "$UPDATE_TEMPLATE" \
             --parameters \
               functionAppName="$FUNCTION_APP_NAME" \
-              targetVersion="$TARGET_VERSION" \
+              acmebotReleaseTag="$TARGET_VERSION" \
             --name "$deploymentName" \
             --output json)
 
