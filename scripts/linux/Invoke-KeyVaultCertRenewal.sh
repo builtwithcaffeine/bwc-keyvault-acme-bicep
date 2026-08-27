@@ -49,17 +49,32 @@ else
   chmod 0640 "$LOG_FILE"
 fi
 
-ts() { date '+[ %Y-%m-%d - %H:%M:%S ]'; }
-log()     { printf '%s %s\n' "$(ts)" "$*" | tee -a "$LOG_FILE"; }
-step()    { echo; log "==> $*"; }
-info()    { log "    $*"; }
-success() { log "OK  $*"; }
-warn()    { log "!!  $*"; }
-fail()    { log "XX  $*"; exit 1; }
+# Colour is applied to the console only, so the log file stays plain text
+if [[ -t 1 ]] && [[ -n "${TERM:-}" && "$TERM" != dumb ]] && command -v tput >/dev/null 2>&1; then
+  C_RESET=$(tput sgr0); C_CYAN=$(tput setaf 6); C_GREEN=$(tput setaf 2)
+  C_YELLOW=$(tput setaf 3); C_RED=$(tput setaf 1)
+else
+  C_RESET=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+fi
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+emit() {
+  local tag="$1" colour="$2" text="$3" now
+  now="$(ts)"
+  printf '%s %-3s %s\n' "$now" "$tag" "$text" >> "$LOG_FILE"
+  printf '%s %b%-3s%b %s\n' "$now" "$colour" "$tag" "$C_RESET" "$text"
+}
+
+step()    { echo; emit '==>' "$C_CYAN" "$*"; }
+info()    { emit ''  ''          "$*"; }
+detail()  { emit ''  ''          "  $*"; }
+success() { emit 'OK' "$C_GREEN"  "$*"; }
+warn()    { emit '!!' "$C_YELLOW" "$*"; }
+fail()    { emit 'XX' "$C_RED"    "$*"; exit 1; }
 
 # Prevent overlapping runs (e.g. a slow run still executing when the timer fires again)
 exec 9>"$LOCK_FILE"
-flock -n 9 || { log "another run is already in progress, exiting"; exit 1; }
+flock -n 9 || { warn "another run is already in progress, exiting"; exit 1; }
 
 TMP_DIR="$(mktemp -d)"
 chmod 0700 "$TMP_DIR"
@@ -350,13 +365,15 @@ for host in "${SERVER_NAMES[@]}"; do
     || fail "Could not parse certificate data for $cert"
 
   CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
-  CERT_EXPIRY["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
-  CERT_DAYS["$cert"]=$(( ($(date -d "${CERT_EXPIRY[$cert]}" +%s) - $(date +%s)) / 86400 ))
+  raw_expiry="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
+  CERT_EXPIRY["$cert"]="$(date -d "$raw_expiry" '+%Y-%m-%d')"
+  CERT_DAYS["$cert"]=$(( ($(date -d "$raw_expiry" +%s) - $(date +%s)) / 86400 ))
   (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Certificate '$cert' has already expired"
 
   CERT_BY_HOST["$host"]="$cert"
   MATCHED_HOSTS+=("$host")
-  info "$host -> $cert (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+  info "$host"
+  detail "$cert, expires ${CERT_EXPIRY[$cert]} (${CERT_DAYS[$cert]} days)"
 done
 
 (( ${#MATCHED_HOSTS[@]} > 0 )) || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
@@ -379,7 +396,7 @@ for host in "${MATCHED_HOSTS[@]}"; do
     # An up-to-date copy of a near-expiry certificate means the ACME issuance
     # side has not renewed it yet, which this script cannot fix
     (( ${CERT_DAYS[$cert]} > 14 )) \
-      || warn "$host: Key Vault copy expires in ${CERT_DAYS[$cert]} days - check the ACME renewal job"
+      || warn "$host expires in ${CERT_DAYS[$cert]} days - check the ACME renewal job"
   else
     STALE_HOSTS+=("$host")
     info "$host: needs update"
@@ -463,7 +480,8 @@ for host in "${STALE_HOSTS[@]:-}"; do
 
   install -m 0644 -o root -g root "$TMP_DIR/$cert.fullchain.pem" "$target_dir/fullchain.pem"
   install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
-  info "$host -> $target_dir ($cert, ${CERT_FINGERPRINT[$cert]})"
+  info "$host"
+  detail "$target_dir"
 done
 if (( DRY_RUN )); then
   info "Dry run: skipped installing certificates for ${#STALE_HOSTS[@]} host(s)"
@@ -622,7 +640,8 @@ for conf in "${TARGET_FILES[@]}"; do
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
     APPENDED_FILES+=("$conf")
-    info "$conf ($cert_host): $TLS_ACTION"
+    info "$conf"
+    detail "$TLS_ACTION"
     continue
   fi
 
@@ -640,11 +659,13 @@ for conf in "${TARGET_FILES[@]}"; do
   fi
 
   if cmp -s "$conf" "$staged"; then
-    info "Already current: $conf ($cert_host)"
+    info "$conf"
+    detail "already current"
   else
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
-    info "Pending update: $conf ($cert_host)"
+    info "$conf"
+    detail "certificate paths to be updated"
   fi
 done
 
@@ -766,11 +787,16 @@ for conf in "${TARGET_FILES[@]}"; do rm -f "$conf$BACKUP_SUFFIX"; done
 # ---- Summary ----------------------------------------------------------------
 
 step "Done"
-info "Key Vault:  $KEY_VAULT_NAME"
-info "Web server: $WEB_SERVER"
+info "Key Vault   $KEY_VAULT_NAME"
+info "Web server  $WEB_SERVER"
+info "Log         $LOG_FILE"
 for host in "${MATCHED_HOSTS[@]}"; do
   cert="${CERT_BY_HOST[$host]}"
-  info "$host -> $CERT_DIR/$host ($cert, expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+  echo
+  info "$host"
+  detail "certificate  $cert"
+  detail "installed    $CERT_DIR/$host"
+  detail "expires      ${CERT_EXPIRY[$cert]} (${CERT_DAYS[$cert]} days)"
 done
-info "Log:        $LOG_FILE"
+echo
 success "Updated ${#STALE_HOSTS[@]} host(s) across ${#TARGET_FILES[@]} site config(s), $WEB_SERVER reloaded"
