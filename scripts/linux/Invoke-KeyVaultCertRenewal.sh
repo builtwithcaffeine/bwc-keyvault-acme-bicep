@@ -454,15 +454,27 @@ NO_TLS_FILES=()
 APPENDED_FILES=()
 STAGE_INDEX=0
 
-# Builds a TLS vhost for a config that only serves plain HTTP, reusing its document root
+# Gives a config file a working TLS vhost: injects the certificate directives into an
+# existing TLS listener, or generates a whole vhost when the site is HTTP-only
 append_tls_block() {
   local conf="$1" host="$2" fullchain="$3" privkey="$4" staged="$5" root=""
 
   if [[ "$WEB_SERVER" == "nginx" ]]; then
-    if grep -qE '^[[:space:]]*listen[[:space:]][^;]*443' "$conf"; then
-      warn "$conf already listens on 443 but has no certificate - fix it manually"
-      return 1
+    if grep -qE '^[[:space:]]*listen[[:space:]].*ssl' "$conf"; then
+      awk -v fc="$fullchain" -v pk="$privkey" '
+        { print }
+        !done && /^[[:space:]]*listen[[:space:]]/ && /ssl/ {
+          match($0, /^[[:space:]]*/)
+          indent = substr($0, 1, RLENGTH)
+          print indent "ssl_certificate " fc ";"
+          print indent "ssl_certificate_key " pk ";"
+          done = 1
+        }
+      ' "$conf" > "$staged"
+      TLS_ACTION="certificate directives added to existing ssl listener"
+      return 0
     fi
+
     root="$(awk '/^[[:space:]]*root[[:space:]]/ { sub(/;.*$/, ""); sub(/^[[:space:]]*root[[:space:]]+/, ""); print; exit }' "$conf")"
     [[ -n "$root" ]] || root="/var/www/html"
 
@@ -488,11 +500,24 @@ server {
     }
 }
 EOF
+    TLS_ACTION="TLS vhost generated"
   else
     if grep -qiE '<VirtualHost[^>]*:443' "$conf"; then
-      warn "$conf already defines a :443 vhost but has no certificate - fix it manually"
-      return 1
+      awk -v fc="$fullchain" -v pk="$privkey" '
+        { print }
+        !done && /<VirtualHost[^>]*:443/ {
+          match($0, /^[[:space:]]*/)
+          indent = substr($0, 1, RLENGTH) "    "
+          print indent "SSLEngine on"
+          print indent "SSLCertificateFile " fc
+          print indent "SSLCertificateKeyFile " pk
+          done = 1
+        }
+      ' "$conf" > "$staged"
+      TLS_ACTION="certificate directives added to existing :443 vhost"
+      return 0
     fi
+
     root="$(awk '/^[[:space:]]*DocumentRoot[[:space:]]/ { sub(/^[[:space:]]*DocumentRoot[[:space:]]+/, ""); gsub(/"/, ""); print; exit }' "$conf")"
     [[ -n "$root" ]] || root="/var/www/html"
 
@@ -510,6 +535,7 @@ EOF
     SSLProtocol -all +TLSv1.2 +TLSv1.3
 </VirtualHost>
 EOF
+    TLS_ACTION="TLS vhost generated"
   fi
   return 0
 }
@@ -534,7 +560,7 @@ for conf in "${TARGET_FILES[@]}"; do
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
     APPENDED_FILES+=("$conf")
-    info "TLS vhost to be added: $conf ($cert_host)"
+    info "$conf ($cert_host): $TLS_ACTION"
     continue
   fi
 
