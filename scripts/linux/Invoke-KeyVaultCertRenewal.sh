@@ -158,7 +158,7 @@ if ! command -v az >/dev/null 2>&1; then
 fi
 command -v az >/dev/null 2>&1 || fail "Azure CLI installation could not be verified."
 command -v openssl >/dev/null 2>&1 || fail "openssl is required but not installed."
-success "Azure CLI available"
+success "Azure CLI Installed: $(az version | grep -m1 '"azure-cli"' | tr -d '",')"
 
 # ---- Authenticating to Azure ------------------------------------------------
 
