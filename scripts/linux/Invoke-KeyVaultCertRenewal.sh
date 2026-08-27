@@ -522,288 +522,373 @@ else
 fi
 success "Using Key Vault: ${KEYVAULT_NAME}"
 
-CERT_SANS=()
-get_certificate_sans() {
-  local name=$1 san
-  CERT_SANS=()
+declare -A CERT_SAN_CACHE=()
+declare -A CERT_SAN_LOADED=()
+
+load_certificate_sans() {
+  local name=$1 normalized
   az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${name}" \
     --query 'policy.x509CertificateProperties.subjectAlternativeNames.dnsNames' -o tsv || return $?
-  while IFS= read -r san; do
-    san=${san//$'\r'/}
-    san=${san,,}
-    san=${san%.}
-    [[ -n "${san}" ]] && CERT_SANS+=("${san}")
-  done < <(printf '%s\n' "${AZ_OUTPUT}" | tr '\t' '\n')
+  normalized=$(printf '%s\n' "${AZ_OUTPUT}" | tr '\t\r' '\n\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | sort -u)
+  CERT_SAN_CACHE["${name}"]=${normalized}
+  CERT_SAN_LOADED["${name}"]=1
 }
 
-certificate_matches_server() {
-  local san server
-  for san in "${CERT_SANS[@]}"; do
-    for server in "${SERVER_NAMES[@]}"; do
-      dns_pattern_matches "${san}" "${server}" && return 0
-    done
-  done
+certificate_covers_server() {
+  local cert_name=$1 server_name=$2 san
+  while IFS= read -r san; do
+    [[ -n "${san}" ]] || continue
+    dns_pattern_matches "${san}" "${server_name}" && return 0
+  done <<<"${CERT_SAN_CACHE[${cert_name}]:-}"
   return 1
 }
 
-step 'Matching certificate'
+declare -a SELECTED_CERTS=()
+declare -A SELECTED_CERT_SEEN=()
+declare -A CERT_SERVER_LIST=()
+
+add_certificate_mapping() {
+  local cert_name=$1 server_name=$2
+  if [[ -z "${CERT_SERVER_LIST[${cert_name}]:-}" ]]; then
+    CERT_SERVER_LIST["${cert_name}"]=${server_name}
+  else
+    CERT_SERVER_LIST["${cert_name}"]+=$'\n'"${server_name}"
+  fi
+  if [[ -z "${SELECTED_CERT_SEEN[${cert_name}]+set}" ]]; then
+    SELECTED_CERT_SEEN["${cert_name}"]=1
+    SELECTED_CERTS+=("${cert_name}")
+  fi
+}
+
+step 'Mapping server names to Key Vault certificates'
 if [[ -n "${CERT_NAME}" ]]; then
   validate_certificate_name "${CERT_NAME}" || fail "Invalid Key Vault certificate name: ${CERT_NAME}"
-  get_certificate_sans "${CERT_NAME}" \
+  load_certificate_sans "${CERT_NAME}" \
     || fail "Could not inspect certificate '${CERT_NAME}': $(az_error)"
-  certificate_matches_server \
+  override_match_count=0
+  for server_name in "${SERVER_NAMES[@]}"; do
+    if certificate_covers_server "${CERT_NAME}" "${server_name}"; then
+      add_certificate_mapping "${CERT_NAME}" "${server_name}"
+      override_match_count=$(( override_match_count + 1 ))
+    fi
+  done
+  (( override_match_count > 0 )) \
     || fail "Certificate override '${CERT_NAME}' does not cover any configured server name"
   info 'Using CERT_NAME override'
 else
-  az_call keyvault certificate list --vault-name "${KEYVAULT_NAME}" --query '[].name' -o tsv \
-    || fail "Could not list certificates in '${KEYVAULT_NAME}': $(az_error)"
+  if ! az_call keyvault certificate list --vault-name "${KEYVAULT_NAME}" --query '[].name' -o tsv; then
+    if [[ "${AZ_STDERR}" == *CERTIFICATE_VERIFY_FAILED* || "${AZ_STDERR}" == *'Hostname mismatch'* ]]; then
+      warn "Key Vault TLS hostname validation failed. Check DNS/private-endpoint routing and HTTPS_PROXY; do not disable certificate verification."
+    fi
+    fail "Could not list certificates in '${KEYVAULT_NAME}': $(az_error)"
+  fi
   mapfile -t VAULT_CERT_NAMES < <(printf '%s\n' "${AZ_OUTPUT}" | tr -d '\r' | sed '/^$/d' | sort -u)
-  declare -a MATCHING_CERTS=()
+  [[ "${#VAULT_CERT_NAMES[@]}" -gt 0 ]] || fail "No certificates found in '${KEYVAULT_NAME}'"
+
   for vault_cert_name in "${VAULT_CERT_NAMES[@]}"; do
     if ! validate_certificate_name "${vault_cert_name}"; then
       warn "Ignoring certificate with unexpected name: ${vault_cert_name}"
       continue
     fi
-    if ! get_certificate_sans "${vault_cert_name}"; then
+    if ! load_certificate_sans "${vault_cert_name}"; then
       warn "Could not inspect certificate '${vault_cert_name}'; enable DEBUG=1 for command diagnostics"
       debug "Azure error for '${vault_cert_name}': $(az_error)"
-      continue
     fi
-    certificate_matches_server && MATCHING_CERTS+=("${vault_cert_name}")
   done
 
-  if [[ "${#MATCHING_CERTS[@]}" -eq 0 ]]; then
-    fail "No certificate in '${KEYVAULT_NAME}' covers any configured server name"
-  elif [[ "${#MATCHING_CERTS[@]}" -gt 1 ]]; then
-    fail "Multiple certificates match (${MATCHING_CERTS[*]}). Set CERT_NAME explicitly to avoid a nondeterministic choice."
-  fi
-  CERT_NAME=${MATCHING_CERTS[0]}
-fi
-success "Selected certificate: ${CERT_NAME}"
+  for server_name in "${SERVER_NAMES[@]}"; do
+    expected_cert_name=${server_name//./-}
+    declare -a server_candidates=()
+    for vault_cert_name in "${VAULT_CERT_NAMES[@]}"; do
+      [[ "${CERT_SAN_LOADED[${vault_cert_name}]:-0}" -eq 1 ]] || continue
+      if certificate_covers_server "${vault_cert_name}" "${server_name}"; then
+        server_candidates+=("${vault_cert_name}")
+      fi
+    done
 
-CERT_DIR="/etc/ssl/${CERT_NAME}"
-CERT_FILE="${CERT_DIR}/fullchain.crt"
-KEY_FILE="${CERT_DIR}/privkey.key"
+    if [[ "${#server_candidates[@]}" -eq 0 ]]; then
+      fail "No Key Vault certificate covers configured server name '${server_name}'"
+    fi
 
-if [[ -L "${CERT_DIR}" ]]; then
-  fail "Refusing to use symlink as certificate directory: ${CERT_DIR}"
+    selected_for_server=''
+    for candidate in "${server_candidates[@]}"; do
+      if [[ "${candidate}" == "${expected_cert_name}" ]]; then
+        selected_for_server=${candidate}
+        break
+      fi
+    done
+
+    if [[ -z "${selected_for_server}" ]]; then
+      if [[ "${#server_candidates[@]}" -eq 1 ]]; then
+        selected_for_server=${server_candidates[0]}
+      else
+        fail "Multiple certificates cover '${server_name}' (${server_candidates[*]}), and none is named '${expected_cert_name}'. Set CERT_NAME explicitly or make the mapping unambiguous."
+      fi
+    fi
+
+    add_certificate_mapping "${selected_for_server}" "${server_name}"
+    success "Mapped ${server_name} -> ${selected_for_server}"
+  done
 fi
-if [[ -e "${CERT_DIR}" && ! -d "${CERT_DIR}" ]]; then
-  fail "Certificate path exists but is not a directory: ${CERT_DIR}"
-fi
-for destination in "${CERT_FILE}" "${KEY_FILE}"; do
-  [[ ! -L "${destination}" ]] || fail "Refusing to replace symlink: ${destination}"
+
+[[ "${#SELECTED_CERTS[@]}" -gt 0 ]] || fail 'No certificates selected'
+success "Selected ${#SELECTED_CERTS[@]} certificate object(s)"
+for selected_cert_name in "${SELECTED_CERTS[@]}"; do
+  info "- ${selected_cert_name}"
 done
 
-info "Certificate path: ${CERT_FILE}"
-info "Private-key path: ${KEY_FILE}"
-
-step 'Checking certificate status'
-az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${CERT_NAME}" --query cer -o tsv \
-  || fail "Could not read the public certificate '${CERT_NAME}': $(az_error)"
-[[ -n "${AZ_OUTPUT}" ]] || fail "Certificate '${CERT_NAME}' returned no public certificate data"
-
-VAULT_DER="${RUN_DIR}/vault.der"
-if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${VAULT_DER}"; then
-  fail "Certificate '${CERT_NAME}' contains invalid base64 public-certificate data"
-fi
-AZ_OUTPUT=''
-
-if ! VAULT_CERT_INFO=$(openssl x509 -inform DER -in "${VAULT_DER}" -noout \
-  -startdate -enddate -fingerprint -sha256 2>&1); then
-  fail "Could not parse Key Vault public certificate: ${VAULT_CERT_INFO}"
-fi
-VAULT_START_DATE=$(grep -i '^notBefore=' <<<"${VAULT_CERT_INFO}" | cut -d= -f2- || true)
-VAULT_EXPIRY_DATE=$(grep -i '^notAfter=' <<<"${VAULT_CERT_INFO}" | cut -d= -f2- || true)
-VAULT_FINGERPRINT=$(grep -i '^sha256 Fingerprint=' <<<"${VAULT_CERT_INFO}" | cut -d= -f2- || true)
-[[ -n "${VAULT_START_DATE}" && -n "${VAULT_EXPIRY_DATE}" && -n "${VAULT_FINGERPRINT}" ]] \
-  || fail "Could not parse validity or fingerprint from certificate: ${VAULT_CERT_INFO}"
-
-START_EPOCH=$(date -d "${VAULT_START_DATE}" +%s) \
-  || fail "Could not parse certificate start date: ${VAULT_START_DATE}"
-EXPIRY_EPOCH=$(date -d "${VAULT_EXPIRY_DATE}" +%s) \
-  || fail "Could not parse certificate expiry date: ${VAULT_EXPIRY_DATE}"
-NOW_EPOCH=$(date +%s)
-(( NOW_EPOCH >= START_EPOCH )) || fail "Key Vault certificate is not valid until ${VAULT_START_DATE}"
-(( NOW_EPOCH < EXPIRY_EPOCH )) || fail "Key Vault certificate expired at ${VAULT_EXPIRY_DATE}"
-EXPIRY_DAYS=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-info "Key Vault certificate expires ${VAULT_EXPIRY_DATE} (${EXPIRY_DAYS} days remaining)"
-if (( EXPIRY_DAYS < EXPIRY_WARN_DAYS )); then
-  warn "Key Vault certificate expires in fewer than ${EXPIRY_WARN_DAYS} days"
-fi
-
-LOCAL_FINGERPRINT=''
-if [[ -f "${CERT_FILE}" ]]; then
-  if LOCAL_FINGERPRINT=$(openssl x509 -in "${CERT_FILE}" -noout -fingerprint -sha256 2>/dev/null \
-    | grep -i '^sha256 Fingerprint=' | cut -d= -f2-); then
-    debug "Local certificate fingerprint: ${LOCAL_FINGERPRINT}"
-  else
-    LOCAL_FINGERPRINT=''
-    warn "Existing local certificate is unreadable or invalid; it will be replaced"
-  fi
-fi
-
-if [[ "${VAULT_FINGERPRINT}" == "${LOCAL_FINGERPRINT}" ]]; then
-  LOCAL_PAIR_VALID=0
-  if [[ -f "${KEY_FILE}" ]]; then
-    if LOCAL_CERT_KEY_HASH=$(openssl x509 -in "${CERT_FILE}" -pubkey -noout 2>/dev/null \
-      | openssl pkey -pubin -outform DER 2>/dev/null \
-      | sha256sum | awk '{print $1}') \
-      && LOCAL_PRIVATE_KEY_HASH=$(openssl pkey -in "${KEY_FILE}" -pubout -outform DER 2>/dev/null \
-      | sha256sum | awk '{print $1}') \
-      && [[ -n "${LOCAL_CERT_KEY_HASH}" && "${LOCAL_CERT_KEY_HASH}" == "${LOCAL_PRIVATE_KEY_HASH}" ]]; then
-      LOCAL_PAIR_VALID=1
-    fi
-  fi
-
-  if [[ "${LOCAL_PAIR_VALID}" -eq 1 ]]; then
-    if ! WEB_TEST_OUTPUT=$(webserver_test 2>&1); then
-      fail "Certificate is current, but the ${WEBSERVER} configuration test failed: ${WEB_TEST_OUTPUT}"
-    fi
-    success "Certificate '${CERT_NAME}' and its private key are already current; ${WEBSERVER} configuration is valid"
-    exit 0
-  fi
-  warn 'Local certificate fingerprint is current, but its private key is missing, unreadable, or mismatched; reinstalling the pair'
-fi
-
-mkdir -p -- "${CERT_DIR}"
-chown root:root "${CERT_DIR}"
-chmod 0750 "${CERT_DIR}"
-
-TMP_PFX="${RUN_DIR}/certificate.pfx"
-TMP_CERT="${RUN_DIR}/fullchain.pem"
-TMP_KEY="${RUN_DIR}/private-key.pem"
-
-step 'Downloading and validating certificate'
-az_call keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${CERT_NAME}" --query contentType -o tsv \
-  || fail "Could not inspect certificate secret '${CERT_NAME}': $(az_error)"
-PFX_CONTENT_TYPE=${AZ_OUTPUT//$'\r'/}
-[[ "${PFX_CONTENT_TYPE}" == 'application/x-pkcs12' ]] \
-  || fail "Certificate secret '${CERT_NAME}' has unsupported content type '${PFX_CONTENT_TYPE:-unset}'; expected application/x-pkcs12"
-
-az_call keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${CERT_NAME}" --query value -o tsv \
-  || fail "Could not download certificate secret '${CERT_NAME}': $(az_error)"
-[[ -n "${AZ_OUTPUT}" ]] || fail "Certificate secret '${CERT_NAME}' returned an empty value"
-if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${TMP_PFX}"; then
-  AZ_OUTPUT=''
-  fail "Certificate secret '${CERT_NAME}' is not valid base64"
-fi
-AZ_OUTPUT=''
-chmod 0600 "${TMP_PFX}"
-
-if ! OPENSSL_ERROR=$(openssl pkcs12 -in "${TMP_PFX}" -nokeys -passin pass: -out "${TMP_CERT}" 2>&1); then
-  fail "Could not extract certificate chain from PFX: ${OPENSSL_ERROR}"
-fi
-if ! OPENSSL_ERROR=$(openssl pkcs12 -in "${TMP_PFX}" -nocerts -nodes -passin pass: -out "${TMP_KEY}" 2>&1); then
-  fail "Could not extract private key from PFX: ${OPENSSL_ERROR}"
-fi
-chmod 0600 "${TMP_CERT}" "${TMP_KEY}"
-rm -f -- "${TMP_PFX}"
-
-DOWNLOADED_FINGERPRINT=$(openssl x509 -in "${TMP_CERT}" -noout -fingerprint -sha256 \
-  | grep -i '^sha256 Fingerprint=' | cut -d= -f2-) \
-  || fail 'Could not fingerprint the downloaded certificate'
-[[ "${DOWNLOADED_FINGERPRINT}" == "${VAULT_FINGERPRINT}" ]] \
-  || fail 'Downloaded PFX leaf certificate does not match the Key Vault certificate object'
-
-# Compare SubjectPublicKeyInfo hashes. This is algorithm-neutral (RSA, EC, EdDSA,
-# etc.) and avoids the original script's RSA-only, MD5-based modulus comparison.
-CERT_PUBLIC_KEY_HASH=$(openssl x509 -in "${TMP_CERT}" -pubkey -noout \
-  | openssl pkey -pubin -outform DER 2>/dev/null \
-  | sha256sum | awk '{print $1}') \
-  || fail 'Could not derive public key from the downloaded certificate'
-PRIVATE_PUBLIC_KEY_HASH=$(openssl pkey -in "${TMP_KEY}" -pubout -outform DER 2>/dev/null \
-  | sha256sum | awk '{print $1}') \
-  || fail 'Could not derive public key from the downloaded private key'
-[[ -n "${CERT_PUBLIC_KEY_HASH}" && "${CERT_PUBLIC_KEY_HASH}" == "${PRIVATE_PUBLIC_KEY_HASH}" ]] \
-  || fail 'Downloaded certificate and private key do not match'
-
-# Check the actual leaf certificate, not only the Key Vault policy metadata.
-ACTUAL_HOST_MATCH=0
-CONCRETE_HOST_COUNT=0
-for server_name in "${SERVER_NAMES[@]}"; do
-  [[ "${server_name}" == '*.'* ]] && continue
-  CONCRETE_HOST_COUNT=$(( CONCRETE_HOST_COUNT + 1 ))
-  if openssl x509 -in "${TMP_CERT}" -noout -checkhost "${server_name}" >/dev/null 2>&1; then
-    ACTUAL_HOST_MATCH=1
-    break
-  fi
-done
-if [[ "${CONCRETE_HOST_COUNT}" -gt 0 && "${ACTUAL_HOST_MATCH}" -eq 0 ]]; then
-  fail 'Downloaded leaf certificate does not cover any concrete configured server name'
-elif [[ "${CONCRETE_HOST_COUNT}" -eq 0 ]]; then
-  warn 'Could not validate a concrete configured hostname against the downloaded leaf certificate; relying on the Key Vault SAN policy match'
-fi
-success 'Certificate, validity, fingerprint, and private key validated'
-
-step 'Installing staged certificate files'
-HAD_CERT=0
-HAD_KEY=0
-[[ -f "${CERT_FILE}" ]] && HAD_CERT=1
-[[ -f "${KEY_FILE}" ]] && HAD_KEY=1
-BACKUP_DIR=''
-
-if [[ "${HAD_CERT}" -eq 1 || "${HAD_KEY}" -eq 1 ]]; then
-  BACKUP_DIR=$(mktemp -d "${CERT_DIR}/backup-$(date '+%Y%m%d%H%M%S')-XXXXXXXX")
-  chmod 0700 "${BACKUP_DIR}"
-  [[ "${HAD_CERT}" -eq 1 ]] && cp -p -- "${CERT_FILE}" "${BACKUP_DIR}/fullchain.crt"
-  [[ "${HAD_KEY}" -eq 1 ]] && cp -p -- "${KEY_FILE}" "${BACKUP_DIR}/privkey.key"
-  info "Previous files backed up to ${BACKUP_DIR}"
-fi
+declare -a UPDATED_CERTS=()
+declare -A HAD_CERT_BY_CERT=()
+declare -A HAD_KEY_BY_CERT=()
+declare -A BACKUP_DIR_BY_CERT=()
 
 restore_previous_files() {
-  local restore_stage
-  warn 'Restoring the previous certificate files'
-  if [[ "${HAD_CERT}" -eq 1 ]]; then
-    restore_stage=$(mktemp "${CERT_DIR}/.restore-cert.XXXXXXXX")
-    install -o root -g root -m 0644 -- "${BACKUP_DIR}/fullchain.crt" "${restore_stage}"
-    mv -f -- "${restore_stage}" "${CERT_FILE}"
-  else
-    rm -f -- "${CERT_FILE}"
-  fi
-  if [[ "${HAD_KEY}" -eq 1 ]]; then
-    restore_stage=$(mktemp "${CERT_DIR}/.restore-key.XXXXXXXX")
-    install -o root -g root -m 0600 -- "${BACKUP_DIR}/privkey.key" "${restore_stage}"
-    mv -f -- "${restore_stage}" "${KEY_FILE}"
-  else
-    rm -f -- "${KEY_FILE}"
-  fi
+  local cert_name cert_dir cert_file key_file backup_dir restore_stage
+  warn 'Restoring all certificate files changed by this run'
+  for cert_name in "${UPDATED_CERTS[@]}"; do
+    cert_dir="/etc/ssl/${cert_name}"
+    cert_file="${cert_dir}/fullchain.crt"
+    key_file="${cert_dir}/privkey.key"
+    backup_dir=${BACKUP_DIR_BY_CERT[${cert_name}]:-}
+
+    if [[ "${HAD_CERT_BY_CERT[${cert_name}]:-0}" -eq 1 ]]; then
+      restore_stage=$(mktemp "${cert_dir}/.restore-cert.XXXXXXXX")
+      install -o root -g root -m 0644 -- "${backup_dir}/fullchain.crt" "${restore_stage}"
+      mv -f -- "${restore_stage}" "${cert_file}"
+    else
+      rm -f -- "${cert_file}"
+    fi
+
+    if [[ "${HAD_KEY_BY_CERT[${cert_name}]:-0}" -eq 1 ]]; then
+      restore_stage=$(mktemp "${cert_dir}/.restore-key.XXXXXXXX")
+      install -o root -g root -m 0600 -- "${backup_dir}/privkey.key" "${restore_stage}"
+      mv -f -- "${restore_stage}" "${key_file}"
+    else
+      rm -f -- "${key_file}"
+    fi
+    warn "Restored previous files for ${cert_name}"
+  done
   ROLLBACK_ARMED=0
 }
 
-STAGED_CERT=$(mktemp "${CERT_DIR}/.fullchain.crt.XXXXXXXX")
-STAGED_KEY=$(mktemp "${CERT_DIR}/.privkey.key.XXXXXXXX")
-install -o root -g root -m 0644 -- "${TMP_CERT}" "${STAGED_CERT}"
-install -o root -g root -m 0600 -- "${TMP_KEY}" "${STAGED_KEY}"
-ROLLBACK_ARMED=1
-mv -f -- "${STAGED_CERT}" "${CERT_FILE}"
-STAGED_CERT=''
-mv -f -- "${STAGED_KEY}" "${KEY_FILE}"
-STAGED_KEY=''
-success 'Certificate files installed'
+process_certificate() {
+  local cert_name=$1
+  local cert_dir="/etc/ssl/${cert_name}"
+  local cert_file="${cert_dir}/fullchain.crt"
+  local key_file="${cert_dir}/privkey.key"
+  local vault_der="${RUN_DIR}/${cert_name}.vault.der"
+  local tmp_pfx="${RUN_DIR}/${cert_name}.pfx"
+  local tmp_cert="${RUN_DIR}/${cert_name}.fullchain.pem"
+  local tmp_key="${RUN_DIR}/${cert_name}.private-key.pem"
+  local vault_cert_info vault_start_date vault_expiry_date vault_fingerprint
+  local start_epoch expiry_epoch now_epoch expiry_days
+  local local_fingerprint='' local_pair_valid=0
+  local local_cert_key_hash='' local_private_key_hash=''
+  local pfx_content_type openssl_error downloaded_fingerprint
+  local cert_public_key_hash private_public_key_hash
+  local concrete_host_count=0 mapped_server_name
+  local had_cert=0 had_key=0 backup_dir=''
+  local staged_cert staged_key
 
-step "Testing and reloading ${WEBSERVER}"
+  if [[ -L "${cert_dir}" ]]; then
+    fail "Refusing to use symlink as certificate directory: ${cert_dir}"
+  fi
+  if [[ -e "${cert_dir}" && ! -d "${cert_dir}" ]]; then
+    fail "Certificate path exists but is not a directory: ${cert_dir}"
+  fi
+  for destination in "${cert_file}" "${key_file}"; do
+    [[ ! -L "${destination}" ]] || fail "Refusing to replace symlink: ${destination}"
+  done
+
+  step "Checking certificate status: ${cert_name}"
+  info "Certificate path: ${cert_file}"
+  info "Private-key path: ${key_file}"
+
+  az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${cert_name}" --query cer -o tsv \
+    || fail "Could not read public certificate '${cert_name}': $(az_error)"
+  [[ -n "${AZ_OUTPUT}" ]] || fail "Certificate '${cert_name}' returned no public certificate data"
+  if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${vault_der}"; then
+    AZ_OUTPUT=''
+    fail "Certificate '${cert_name}' contains invalid base64 public-certificate data"
+  fi
+  AZ_OUTPUT=''
+
+  if ! vault_cert_info=$(openssl x509 -inform DER -in "${vault_der}" -noout \
+    -startdate -enddate -fingerprint -sha256 2>&1); then
+    fail "Could not parse Key Vault public certificate '${cert_name}': ${vault_cert_info}"
+  fi
+  vault_start_date=$(grep -i '^notBefore=' <<<"${vault_cert_info}" | cut -d= -f2- || true)
+  vault_expiry_date=$(grep -i '^notAfter=' <<<"${vault_cert_info}" | cut -d= -f2- || true)
+  vault_fingerprint=$(grep -i '^sha256 Fingerprint=' <<<"${vault_cert_info}" | cut -d= -f2- || true)
+  [[ -n "${vault_start_date}" && -n "${vault_expiry_date}" && -n "${vault_fingerprint}" ]] \
+    || fail "Could not parse validity or fingerprint for '${cert_name}'"
+
+  start_epoch=$(date -d "${vault_start_date}" +%s) \
+    || fail "Could not parse certificate start date: ${vault_start_date}"
+  expiry_epoch=$(date -d "${vault_expiry_date}" +%s) \
+    || fail "Could not parse certificate expiry date: ${vault_expiry_date}"
+  now_epoch=$(date +%s)
+  (( now_epoch >= start_epoch )) || fail "Certificate '${cert_name}' is not valid until ${vault_start_date}"
+  (( now_epoch < expiry_epoch )) || fail "Certificate '${cert_name}' expired at ${vault_expiry_date}"
+  expiry_days=$(( (expiry_epoch - now_epoch) / 86400 ))
+  info "Expires ${vault_expiry_date} (${expiry_days} days remaining)"
+  if (( expiry_days < EXPIRY_WARN_DAYS )); then
+    warn "Certificate '${cert_name}' expires in fewer than ${EXPIRY_WARN_DAYS} days"
+  fi
+
+  # Validate every concrete mapping against the issued certificate, not just the
+  # Key Vault policy. This also protects the no-op path when files are current.
+  while IFS= read -r mapped_server_name; do
+    [[ -n "${mapped_server_name}" ]] || continue
+    [[ "${mapped_server_name}" == '*.'* ]] && continue
+    concrete_host_count=$(( concrete_host_count + 1 ))
+    openssl x509 -inform DER -in "${vault_der}" -noout -checkhost "${mapped_server_name}" >/dev/null 2>&1 \
+      || fail "Certificate '${cert_name}' does not cover mapped server name '${mapped_server_name}'"
+  done <<<"${CERT_SERVER_LIST[${cert_name}]:-}"
+  if [[ "${concrete_host_count}" -eq 0 ]]; then
+    warn "Could not validate a concrete hostname for '${cert_name}'; relying on Key Vault SAN policy"
+  fi
+
+  if [[ -f "${cert_file}" ]]; then
+    if local_fingerprint=$(openssl x509 -in "${cert_file}" -noout -fingerprint -sha256 2>/dev/null \
+      | grep -i '^sha256 Fingerprint=' | cut -d= -f2-); then
+      debug "Local fingerprint for ${cert_name}: ${local_fingerprint}"
+    else
+      local_fingerprint=''
+      warn "Existing local certificate for '${cert_name}' is unreadable or invalid"
+    fi
+  fi
+
+  if [[ "${vault_fingerprint}" == "${local_fingerprint}" && -f "${key_file}" ]]; then
+    if local_cert_key_hash=$(openssl x509 -in "${cert_file}" -pubkey -noout 2>/dev/null \
+      | openssl pkey -pubin -outform DER 2>/dev/null \
+      | sha256sum | awk '{print $1}') \
+      && local_private_key_hash=$(openssl pkey -in "${key_file}" -pubout -outform DER 2>/dev/null \
+      | sha256sum | awk '{print $1}') \
+      && [[ -n "${local_cert_key_hash}" && "${local_cert_key_hash}" == "${local_private_key_hash}" ]]; then
+      local_pair_valid=1
+    fi
+  fi
+
+  if [[ "${vault_fingerprint}" == "${local_fingerprint}" && "${local_pair_valid}" -eq 1 ]]; then
+    success "Certificate '${cert_name}' and private key are already current"
+    return 0
+  elif [[ "${vault_fingerprint}" == "${local_fingerprint}" ]]; then
+    warn "Certificate '${cert_name}' is current, but its private key is missing, unreadable, or mismatched; reinstalling"
+  fi
+
+  mkdir -p -- "${cert_dir}"
+  chown root:root "${cert_dir}"
+  chmod 0750 "${cert_dir}"
+
+  step "Downloading and validating certificate: ${cert_name}"
+  az_call keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${cert_name}" --query contentType -o tsv \
+    || fail "Could not inspect certificate secret '${cert_name}': $(az_error)"
+  pfx_content_type=${AZ_OUTPUT//$'\r'/}
+  [[ "${pfx_content_type}" == 'application/x-pkcs12' ]] \
+    || fail "Certificate secret '${cert_name}' has unsupported content type '${pfx_content_type:-unset}'; expected application/x-pkcs12"
+
+  az_call keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${cert_name}" --query value -o tsv \
+    || fail "Could not download certificate secret '${cert_name}': $(az_error)"
+  [[ -n "${AZ_OUTPUT}" ]] || fail "Certificate secret '${cert_name}' returned an empty value"
+  if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${tmp_pfx}"; then
+    AZ_OUTPUT=''
+    fail "Certificate secret '${cert_name}' is not valid base64"
+  fi
+  AZ_OUTPUT=''
+  chmod 0600 "${tmp_pfx}"
+
+  if ! openssl_error=$(openssl pkcs12 -in "${tmp_pfx}" -nokeys -passin pass: -out "${tmp_cert}" 2>&1); then
+    fail "Could not extract certificate chain from PFX '${cert_name}': ${openssl_error}"
+  fi
+  if ! openssl_error=$(openssl pkcs12 -in "${tmp_pfx}" -nocerts -nodes -passin pass: -out "${tmp_key}" 2>&1); then
+    fail "Could not extract private key from PFX '${cert_name}': ${openssl_error}"
+  fi
+  chmod 0600 "${tmp_cert}" "${tmp_key}"
+  rm -f -- "${tmp_pfx}"
+
+  downloaded_fingerprint=$(openssl x509 -in "${tmp_cert}" -noout -fingerprint -sha256 \
+    | grep -i '^sha256 Fingerprint=' | cut -d= -f2-) \
+    || fail "Could not fingerprint downloaded certificate '${cert_name}'"
+  [[ "${downloaded_fingerprint}" == "${vault_fingerprint}" ]] \
+    || fail "Downloaded PFX leaf for '${cert_name}' does not match its Key Vault certificate object"
+
+  cert_public_key_hash=$(openssl x509 -in "${tmp_cert}" -pubkey -noout \
+    | openssl pkey -pubin -outform DER 2>/dev/null \
+    | sha256sum | awk '{print $1}') \
+    || fail "Could not derive public key from certificate '${cert_name}'"
+  private_public_key_hash=$(openssl pkey -in "${tmp_key}" -pubout -outform DER 2>/dev/null \
+    | sha256sum | awk '{print $1}') \
+    || fail "Could not derive public key from private key '${cert_name}'"
+  [[ -n "${cert_public_key_hash}" && "${cert_public_key_hash}" == "${private_public_key_hash}" ]] \
+    || fail "Downloaded certificate and private key do not match for '${cert_name}'"
+
+  success "Validated certificate, validity, hostname, fingerprint, and private key for '${cert_name}'"
+
+  [[ -f "${cert_file}" ]] && had_cert=1
+  [[ -f "${key_file}" ]] && had_key=1
+  HAD_CERT_BY_CERT["${cert_name}"]=${had_cert}
+  HAD_KEY_BY_CERT["${cert_name}"]=${had_key}
+  BACKUP_DIR_BY_CERT["${cert_name}"]=''
+
+  if [[ "${had_cert}" -eq 1 || "${had_key}" -eq 1 ]]; then
+    backup_dir=$(mktemp -d "${cert_dir}/backup-$(date '+%Y%m%d%H%M%S')-XXXXXXXX")
+    chmod 0700 "${backup_dir}"
+    [[ "${had_cert}" -eq 1 ]] && cp -p -- "${cert_file}" "${backup_dir}/fullchain.crt"
+    [[ "${had_key}" -eq 1 ]] && cp -p -- "${key_file}" "${backup_dir}/privkey.key"
+    BACKUP_DIR_BY_CERT["${cert_name}"]=${backup_dir}
+    info "Previous files backed up to ${backup_dir}"
+  fi
+
+  STAGED_CERT=$(mktemp "${cert_dir}/.fullchain.crt.XXXXXXXX")
+  STAGED_KEY=$(mktemp "${cert_dir}/.privkey.key.XXXXXXXX")
+  install -o root -g root -m 0644 -- "${tmp_cert}" "${STAGED_CERT}"
+  install -o root -g root -m 0600 -- "${tmp_key}" "${STAGED_KEY}"
+
+  UPDATED_CERTS+=("${cert_name}")
+  ROLLBACK_ARMED=1
+  mv -f -- "${STAGED_CERT}" "${cert_file}"
+  STAGED_CERT=''
+  mv -f -- "${STAGED_KEY}" "${key_file}"
+  STAGED_KEY=''
+  success "Installed staged certificate files for '${cert_name}'"
+}
+
+for selected_cert_name in "${SELECTED_CERTS[@]}"; do
+  process_certificate "${selected_cert_name}"
+done
+
+step "Testing ${WEBSERVER} configuration"
 if ! WEB_TEST_OUTPUT=$(webserver_test 2>&1); then
-  restore_previous_files
-  fail "${WEBSERVER} configuration test failed; previous files restored: ${WEB_TEST_OUTPUT}"
+  if [[ "${#UPDATED_CERTS[@]}" -gt 0 ]]; then
+    restore_previous_files
+  fi
+  fail "${WEBSERVER} configuration test failed: ${WEB_TEST_OUTPUT}"
 fi
 
+if [[ "${#UPDATED_CERTS[@]}" -eq 0 ]]; then
+  success "All ${#SELECTED_CERTS[@]} selected certificate(s) are current and ${WEBSERVER} configuration is valid"
+  exit 0
+fi
+
+step "Reloading ${WEBSERVER}"
 if ! RELOAD_OUTPUT=$(webserver_reload 2>&1); then
   restore_previous_files
   if webserver_test >/dev/null 2>&1; then
     webserver_reload >/dev/null 2>&1 || warn 'Could not reload the web server after rollback; manual intervention is required'
   fi
-  fail "${WEBSERVER} reload failed; previous files restored: ${RELOAD_OUTPUT}"
+  fail "${WEBSERVER} reload failed; all files changed by this run were restored: ${RELOAD_OUTPUT}"
 fi
 ROLLBACK_ARMED=0
 success "${WEBSERVER} configuration tested and service reloaded"
 
-# Prune only after a successful test and reload, ensuring the just-created rollback
-# point is available throughout the risky part of the update.
-mapfile -t OLD_BACKUPS < <(find "${CERT_DIR}" -maxdepth 1 -mindepth 1 -type d -name 'backup-*' -print | sort -r | tail -n +6)
-for old_backup in "${OLD_BACKUPS[@]}"; do
-  [[ -n "${old_backup}" ]] && rm -rf -- "${old_backup}"
+for selected_cert_name in "${UPDATED_CERTS[@]}"; do
+  cert_dir="/etc/ssl/${selected_cert_name}"
+  mapfile -t OLD_BACKUPS < <(find "${cert_dir}" -maxdepth 1 -mindepth 1 -type d -name 'backup-*' -print | sort -r | tail -n +6)
+  for old_backup in "${OLD_BACKUPS[@]}"; do
+    [[ -n "${old_backup}" ]] && rm -rf -- "${old_backup}"
+  done
 done
 
 step 'Done'
-success "Certificate '${CERT_NAME}' installed; ${WEBSERVER} reloaded successfully"
+success "Installed ${#UPDATED_CERTS[@]} certificate update(s) and reloaded ${WEBSERVER} successfully"
