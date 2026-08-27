@@ -13,6 +13,8 @@ umask 077
 # Optional environment overrides. Environment values are preserved rather than
 # overwritten, which makes the script usable from a protected systemd EnvironmentFile.
 KEYVAULT_NAME="${KEYVAULT_NAME:-}"
+# User-assigned managed identity client-ID override. If empty, the script uses
+# IMDS to discover the VM's single unambiguous user-assigned identity.
 AZURE_CLIENT_ID="${AZURE_CLIENT_ID:-}"
 AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID:-}"
 AZURE_CLOUD="${AZURE_CLOUD:-AzureCloud}"
@@ -237,8 +239,112 @@ dns_pattern_matches() {
   [[ -n "${left}" && "${left}" != *.* ]]
 }
 
+IMDS_DISCOVERY_ERROR=''
+DISCOVERED_IDENTITY_RESOURCE_ID=''
+discover_user_assigned_identity() {
+  local response_file="${RUN_DIR}/imds-identity-response.json"
+  local error_file="${RUN_DIR}/imds-identity-error.txt"
+  local http_code curl_rc response token payload_b64 payload
+  local client_id identity_resource_id user_identity_resource_id remainder
+
+  : > "${response_file}"
+  : > "${error_file}"
+  if http_code=$(curl --silent --show-error --noproxy '*' \
+    --connect-timeout 2 --max-time 10 \
+    --header 'Metadata:true' \
+    --get \
+    --data-urlencode 'api-version=2018-02-01' \
+    --data-urlencode "resource=${ARM_RESOURCE}" \
+    --output "${response_file}" \
+    --write-out '%{http_code}' \
+    'http://169.254.169.254/metadata/identity/oauth2/token' \
+    2>"${error_file}"); then
+    curl_rc=0
+  else
+    curl_rc=$?
+  fi
+
+  if [[ "${curl_rc}" -ne 0 ]]; then
+    IMDS_DISCOVERY_ERROR="IMDS request failed: $(<"${error_file}")"
+    return 1
+  fi
+
+  response=$(<"${response_file}")
+  : > "${response_file}"
+  if [[ "${http_code}" != '200' ]]; then
+    response=${response//$'\r'/ }
+    response=${response//$'\n'/ }
+    IMDS_DISCOVERY_ERROR="IMDS returned HTTP ${http_code}: ${response:0:500}"
+    unset response
+    return 1
+  fi
+
+  # The response is trusted VM-local IMDS JSON. Extract only the JWT, never log
+  # it, and immediately discard the original response.
+  token=$(sed -nE 's/.*"access_token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"${response}")
+  unset response
+  if [[ -z "${token}" ]]; then
+    IMDS_DISCOVERY_ERROR='IMDS returned HTTP 200 without a parseable access token'
+    return 1
+  fi
+
+  remainder=${token#*.}
+  if [[ "${remainder}" == "${token}" || "${remainder}" != *.* ]]; then
+    unset token remainder
+    IMDS_DISCOVERY_ERROR='IMDS returned a malformed access token'
+    return 1
+  fi
+  payload_b64=${remainder%%.*}
+  unset token remainder
+  payload_b64=${payload_b64//-/+}
+  payload_b64=${payload_b64//_/\/}
+  case $(( ${#payload_b64} % 4 )) in
+    0) ;;
+    2) payload_b64+='==' ;;
+    3) payload_b64+='=' ;;
+    *) unset payload_b64; IMDS_DISCOVERY_ERROR='IMDS returned an invalid JWT payload'; return 1 ;;
+  esac
+
+  if ! payload=$(printf '%s' "${payload_b64}" | base64 --decode 2>/dev/null); then
+    unset payload_b64
+    IMDS_DISCOVERY_ERROR='Could not decode the IMDS token payload'
+    return 1
+  fi
+  unset payload_b64
+
+  client_id=$(sed -nE 's/.*"appid"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"${payload}")
+  if [[ -z "${client_id}" ]]; then
+    client_id=$(sed -nE 's/.*"azp"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"${payload}")
+  fi
+  identity_resource_id=$(sed -nE 's/.*"xms_mirid"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"${payload}")
+  user_identity_resource_id=$(sed -nE 's/.*"xms_az_rid"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' <<<"${payload}")
+  unset payload
+
+  # UAMI tokens identify a Microsoft.ManagedIdentity/userAssignedIdentities
+  # resource. A VM resource ID indicates that IMDS selected the system identity.
+  if [[ "${user_identity_resource_id,,}" == */providers/microsoft.managedidentity/userassignedidentities/* ]]; then
+    DISCOVERED_IDENTITY_RESOURCE_ID=${user_identity_resource_id}
+  elif [[ "${identity_resource_id,,}" == */providers/microsoft.managedidentity/userassignedidentities/* ]]; then
+    DISCOVERED_IDENTITY_RESOURCE_ID=${identity_resource_id}
+  else
+    unset client_id identity_resource_id user_identity_resource_id
+    IMDS_DISCOVERY_ERROR='IMDS did not select a user-assigned identity. If the VM also has a system-assigned identity, set AZURE_CLIENT_ID to the required UAMI client ID.'
+    return 1
+  fi
+
+  if [[ ! "${client_id}" =~ ${UUID_REGEX} ]]; then
+    unset client_id
+    IMDS_DISCOVERY_ERROR='The selected UAMI token did not contain a valid client ID'
+    return 1
+  fi
+
+  AZURE_CLIENT_ID=${client_id}
+  unset client_id identity_resource_id user_identity_resource_id
+  return 0
+}
+
 required_commands=(
-  awk base64 cat chmod chown cp cut date find grep install mkdir mv openssl rm
+  awk base64 cat chmod chown cp curl cut date find grep install mkdir mv openssl rm
   sed sha256sum sort stat systemctl tail touch tr
 )
 
@@ -369,16 +475,26 @@ for server_name in "${SERVER_NAMES[@]}"; do
   info "- ${server_name}"
 done
 
-step 'Authenticating to Azure with managed identity'
+step 'Authenticating to Azure with a user-assigned managed identity'
 az_call cloud set --name "${AZURE_CLOUD}" --output none \
   || fail "Could not select Azure cloud '${AZURE_CLOUD}': $(az_error)"
+az_call cloud show --name "${AZURE_CLOUD}" --query endpoints.resourceManager -o tsv \
+  || fail "Could not read the Resource Manager endpoint for '${AZURE_CLOUD}': $(az_error)"
+ARM_RESOURCE=${AZ_OUTPUT//$'\r'/}
+[[ "${ARM_RESOURCE}" == https://* ]] \
+  || fail "Azure cloud '${AZURE_CLOUD}' returned an invalid Resource Manager endpoint"
+
 if [[ -n "${AZURE_CLIENT_ID}" ]]; then
-  az_call login --identity --client-id "${AZURE_CLIENT_ID}" --allow-no-subscriptions --output none \
-    || fail "Managed-identity login failed: $(az_error)"
+  info "Using AZURE_CLIENT_ID override: ${AZURE_CLIENT_ID}"
 else
-  az_call login --identity --allow-no-subscriptions --output none \
-    || fail "Managed-identity login failed: $(az_error)"
+  info 'AZURE_CLIENT_ID is empty; discovering the VM user-assigned identity through IMDS'
+  discover_user_assigned_identity \
+    || fail "Could not auto-discover an unambiguous VM user-assigned identity: ${IMDS_DISCOVERY_ERROR} Set AZURE_CLIENT_ID explicitly."
+  info "Discovered UAMI client ID: ${AZURE_CLIENT_ID}"
+  debug "Discovered UAMI resource ID: ${DISCOVERED_IDENTITY_RESOURCE_ID}"
 fi
+az_call login --identity --client-id "${AZURE_CLIENT_ID}" --allow-no-subscriptions --output none \
+  || fail "User-assigned managed-identity login failed for client ID '${AZURE_CLIENT_ID}': $(az_error)"
 if [[ -n "${AZURE_SUBSCRIPTION_ID}" ]]; then
   az_call account set --subscription "${AZURE_SUBSCRIPTION_ID}" \
     || fail "Could not select Azure subscription '${AZURE_SUBSCRIPTION_ID}': $(az_error)"
@@ -386,7 +502,7 @@ fi
 az_call account show --query '{tenantId:tenantId,subscriptionId:id}' -o json \
   || fail "Managed-identity session validation failed: $(az_error)"
 debug "Azure context: ${AZ_OUTPUT}"
-success 'Authenticated using an isolated Azure CLI profile'
+success "Authenticated with user-assigned managed identity ${AZURE_CLIENT_ID} using an isolated Azure CLI profile"
 
 step 'Locating Key Vault'
 if [[ -n "${KEYVAULT_NAME}" ]]; then
