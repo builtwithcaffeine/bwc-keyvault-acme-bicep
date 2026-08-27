@@ -20,15 +20,17 @@ AZURE_CLIENT_ID="${AZURE_CLIENT_ID:-}"   # empty = system-assigned identity
 CERT_DIR="${CERT_DIR:-/etc/ssl}"        # certificates are installed to <CERT_DIR>/<fqdn>/
 APPEND_TLS=1                             # generate a TLS vhost when one is missing
 LOG_FILE="/var/log/keyvault-acme-update.log"
-LOCK_FILE="/var/run/keyvault-acme-update.lock"
+LOCK_FILE="/run/keyvault-acme-update.lock"
 LOGROTATE_FILE="/etc/logrotate.d/keyvault-acme-update"
 DRY_RUN=0
 
+need_value() { [[ -n "${2:-}" ]] || { echo "$1 requires a value" >&2; exit 2; }; }
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --key-vault-name) KEY_VAULT_NAME="$2"; shift 2 ;;
-    --client-id)      AZURE_CLIENT_ID="$2"; shift 2 ;;
-    --cert-dir)       CERT_DIR="$2"; shift 2 ;;
+    --key-vault-name) need_value "$1" "${2:-}"; KEY_VAULT_NAME="$2"; shift 2 ;;
+    --client-id)      need_value "$1" "${2:-}"; AZURE_CLIENT_ID="$2"; shift 2 ;;
+    --cert-dir)       need_value "$1" "${2:-}"; CERT_DIR="$2"; shift 2 ;;
     --no-tls-append)  APPEND_TLS=0; shift ;;
     --dry-run)        DRY_RUN=1; shift ;;
     -h|--help)        sed -n '2,8p' "$0"; exit 0 ;;
@@ -40,8 +42,12 @@ done
 
 # ---- Logging helpers --------------------------------------------------------
 
-install -m 0640 -o root -g root /dev/null "$LOG_FILE" 2>/dev/null || touch "$LOG_FILE"
-chmod 0640 "$LOG_FILE"
+# Created only when absent - installing /dev/null over an existing log would truncate it
+if [[ ! -f "$LOG_FILE" ]]; then
+  install -m 0640 -o root -g root /dev/null "$LOG_FILE"
+else
+  chmod 0640 "$LOG_FILE"
+fi
 
 ts() { date '+[ %Y-%m-%d - %H:%M:%S ]'; }
 log()     { printf '%s %s\n' "$(ts)" "$*" | tee -a "$LOG_FILE"; }
@@ -77,8 +83,8 @@ az_tsv() {
 
 step "Ensuring log rotation"
 if [[ ! -f "$LOGROTATE_FILE" ]]; then
-  cat > "$LOGROTATE_FILE" <<'EOF'
-/var/log/keyvault-acme-update.log {
+  cat > "$LOGROTATE_FILE" <<EOF
+$LOG_FILE {
     daily
     rotate 30
     missingok
@@ -103,9 +109,19 @@ if ! command -v az >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq curl ca-certificates >/dev/null
-    # Microsoft-published installer; adds the signed apt repo and installs azure-cli
-    curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash >>"$LOG_FILE" 2>&1 \
+    apt-get install -y -qq curl ca-certificates gnupg apt-transport-https >/dev/null
+    # Registering the signed repo lets apt verify every package, unlike piping the
+    # installer script straight into a root shell
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+      | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg \
+      || fail "Could not import the Microsoft signing key"
+    chmod 0644 /usr/share/keyrings/microsoft.gpg
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf 'deb [arch=%s signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ %s main\n' \
+      "$(dpkg --print-architecture)" "$VERSION_CODENAME" > /etc/apt/sources.list.d/azure-cli.list
+    apt-get update -qq
+    apt-get install -y -qq azure-cli >>"$LOG_FILE" 2>&1 \
       || fail "Azure CLI install failed, see $LOG_FILE"
   elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     PKG=$(command -v dnf || command -v yum)
@@ -121,24 +137,24 @@ if ! command -v az >/dev/null 2>&1; then
 fi
 command -v az >/dev/null 2>&1 || fail "Azure CLI installation could not be verified."
 command -v openssl >/dev/null 2>&1 || fail "openssl is required but not installed."
-success "Azure CLI Installed"
+success "Azure CLI available"
 
 # ---- Authenticating to Azure ------------------------------------------------
 
 step "Authenticating to Azure"
-if ! az account show >/dev/null 2>&1; then
-  info "Logging in using managed identity..."
-  if [[ -n "$AZURE_CLIENT_ID" ]]; then
-    # --client-id replaced --username in newer Azure CLI releases; try both
-    az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
-      || az login --identity --username "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
-      || fail "az login --identity for $AZURE_CLIENT_ID failed, see $LOG_FILE"
-    info "Using user-assigned identity: $AZURE_CLIENT_ID"
-  else
-    az login --identity >/dev/null 2>>"$LOG_FILE" \
-      || fail "az login --identity failed, see $LOG_FILE"
-    info "Using system-assigned identity"
-  fi
+if [[ -n "$AZURE_CLIENT_ID" ]]; then
+  # Always re-login: a cached session may belong to a different identity on this VM
+  # --client-id replaced --username in newer Azure CLI releases, so try both
+  az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+    || az login --identity --username "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+    || fail "az login --identity for $AZURE_CLIENT_ID failed, see $LOG_FILE"
+  info "Using user-assigned identity: $AZURE_CLIENT_ID"
+elif ! az account show >/dev/null 2>&1; then
+  az login --identity >/dev/null 2>>"$LOG_FILE" \
+    || fail "az login --identity failed, see $LOG_FILE"
+  info "Using system-assigned identity"
+else
+  info "Using existing Azure CLI session"
 fi
 success "Authenticated to Azure"
 
@@ -184,8 +200,8 @@ VHOST_MAP="$TMP_DIR/vhosts.tsv"
 
 # Extracts "server_name a b c;" / "ServerName a" / "ServerAlias a b" from a config file
 parse_server_names() {
-  local file="$1" dump="$2"
-  awk -v conf="$file" '
+  local conf="$1"
+  awk -v conf="$conf" '
     /^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]/ {
       line = $0
       sub(/#.*$/, "", line); sub(/;.*$/, "", line)
@@ -195,7 +211,7 @@ parse_server_names() {
         if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" conf
       }
     }
-  ' "$dump"
+  ' "$conf"
 }
 
 if [[ "$WEB_SERVER" == "nginx" ]]; then
@@ -218,40 +234,51 @@ if [[ "$WEB_SERVER" == "nginx" ]]; then
     # certificate path this script has not created yet - fall back to scanning the tree
     cat "$TMP_DIR/nginx-err.txt" >> "$LOG_FILE"
     warn "nginx -T failed: $(head -n 3 "$TMP_DIR/nginx-err.txt" | tr '\n' ' ')"
-    warn "Falling back to scanning /etc/nginx for server names"
-    # -R (not -r) so the symlinks in sites-enabled are followed
+    warn "Falling back to scanning nginx config for server names"
+    # Prefer sites-enabled so disabled vhosts are not given certificates;
+    # -R (not -r) follows the symlinks it contains
+    NGINX_SCAN_ROOT=/etc/nginx
+    [[ -d /etc/nginx/sites-enabled ]] && NGINX_SCAN_ROOT=/etc/nginx/sites-enabled
     while IFS= read -r conf; do
-      parse_server_names "$conf" "$conf"
-    done < <(grep -RlE '^[[:space:]]*server_name[[:space:]]' /etc/nginx 2>/dev/null || true) \
+      parse_server_names "$conf"
+    done < <(grep -RlE '^[[:space:]]*server_name[[:space:]]' "$NGINX_SCAN_ROOT" 2>/dev/null || true) \
       | sort -u > "$VHOST_MAP"
   fi
 else
-  # apachectl -S lists: "port 443 namevhost example.com (/etc/apache2/sites-enabled/x.conf:12)"
-  # Port 80 vhosts are included too, so an HTTP-only site can still be given a TLS vhost
+  # apachectl -S lines all end in "(<file>:<line>)" preceded by the host name, whether
+  # they read "port 443 namevhost x.com (...)", "*:80 x.com (...)" or "default server x.com (...)"
   if "$APACHE_BIN" -S > "$TMP_DIR/apache-dump.txt" 2>&1; then
     awk '
-      /namevhost/ {
-        host = $4
-        file = $5
+      $NF ~ /^\(\/.*:[0-9]+\)$/ && NF >= 2 {
+        host = $(NF - 1)
+        file = $NF
         gsub(/[()]/, "", file)
         sub(/:[0-9]+$/, "", file)
-        if (host != "" && file != "") print host "\t" file
+        if (host ~ /\./ && host !~ /^[*:]/) print host "\t" file
       }
     ' "$TMP_DIR/apache-dump.txt" | sort -u > "$VHOST_MAP"
   else
     cat "$TMP_DIR/apache-dump.txt" >> "$LOG_FILE"
     warn "$APACHE_BIN -S failed: $(head -n 3 "$TMP_DIR/apache-dump.txt" | tr '\n' ' ')"
-    warn "Falling back to scanning Apache config for server names"
+  fi
+
+  # -S reports nothing useful when every vhost lacks a ServerName, so scan the tree
+  if [[ ! -s "$VHOST_MAP" ]]; then
+    warn "No server names in $APACHE_BIN -S output, scanning Apache config instead"
     APACHE_ROOT=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
+    [[ -d "$APACHE_ROOT/sites-enabled" ]] && APACHE_ROOT="$APACHE_ROOT/sites-enabled"
     while IFS= read -r conf; do
-      parse_server_names "$conf" "$conf"
+      parse_server_names "$conf"
     done < <(grep -RlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
       | sort -u > "$VHOST_MAP"
   fi
 fi
 
 if [[ ! -s "$VHOST_MAP" ]]; then
-  fail "No TLS-enabled virtual hosts with a server name were found for $WEB_SERVER"
+  if [[ "$WEB_SERVER" == "apache" ]]; then
+    fail "No ServerName found in any enabled Apache vhost - add 'ServerName <fqdn>' to your site config and re-run"
+  fi
+  fail "No server_name found in any enabled nginx vhost - add 'server_name <fqdn>;' to your site config and re-run"
 fi
 
 # sites-enabled entries are symlinks into sites-available, so resolve to the real
@@ -287,6 +314,12 @@ declare -A CERT_BY_HOST CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
 MATCHED_HOSTS=()
 
 for host in "${SERVER_NAMES[@]}"; do
+  # Rejects anything that is not a plain hostname, so it can never escape $CERT_DIR
+  if [[ ! "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+    warn "Skipping malformed server name: $host"
+    continue
+  fi
+
   # Key Vault names cannot contain dots, so site.example.com is stored as site-example-com
   cert="${host//./-}"
 
@@ -343,6 +376,10 @@ for host in "${MATCHED_HOSTS[@]}"; do
 
   if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
     info "$host: up to date"
+    # An up-to-date copy of a near-expiry certificate means the ACME issuance
+    # side has not renewed it yet, which this script cannot fix
+    (( ${CERT_DAYS[$cert]} > 14 )) \
+      || warn "$host: Key Vault copy expires in ${CERT_DAYS[$cert]} days - check the ACME renewal job"
   else
     STALE_HOSTS+=("$host")
     info "$host: needs update"
@@ -359,7 +396,6 @@ if (( DRY_RUN )); then
   for host in "${STALE_HOSTS[@]:-}"; do
     [[ -n "$host" ]] && warn "Dry run: ${CERT_BY_HOST[$host]} would be installed to $CERT_DIR/$host"
   done
-  exit 0
 fi
 
 # ---- Downloading certificates -----------------------------------------------
@@ -372,11 +408,12 @@ strip_pem() { awk '/^-----BEGIN/,/^-----END/' "$1"; }
 step "Downloading certificates"
 for cert in "${STALE_CERTS[@]:-}"; do
   [[ -n "$cert" ]] || continue
+  (( DRY_RUN )) && continue
   # Certificates are stored as PFX-encoded secrets alongside the certificate object
   pfx_b64="$TMP_DIR/$cert.b64"
   pfx_file="$TMP_DIR/$cert.pfx"
-  (umask 077; az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'value' -o tsv > "$pfx_b64" 2>>"$LOG_FILE") \
-    || fail "Failed to read secret '$cert' from Key Vault '$KEY_VAULT_NAME'"
+  az_tsv "$pfx_b64" keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'value' \
+    || fail "Failed to read secret '$cert' from Key Vault '$KEY_VAULT_NAME': $AZ_ERROR"
   [[ -s "$pfx_b64" ]] || fail "Secret '$cert' is empty"
   base64 -d < "$pfx_b64" > "$pfx_file" || fail "Could not decode PFX data for $cert"
   shred -u "$pfx_b64" 2>/dev/null || rm -f "$pfx_b64"
@@ -389,7 +426,7 @@ for cert in "${STALE_CERTS[@]:-}"; do
   strip_pem "$TMP_DIR/$cert.chainbag.pem" > "$TMP_DIR/$cert.fullchain.pem"
   strip_pem "$TMP_DIR/$cert.rawkey.pem" > "$TMP_DIR/$cert.privkey.pem"
 
-  new_fingerprint="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  new_fingerprint="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
   [[ "$new_fingerprint" == "${CERT_FINGERPRINT[$cert]}" ]] \
     || fail "Downloaded $cert fingerprint ($new_fingerprint) does not match Key Vault (${CERT_FINGERPRINT[$cert]})"
 
@@ -402,7 +439,11 @@ for cert in "${STALE_CERTS[@]:-}"; do
 
   info "Downloaded and verified: $cert"
 done
-success "All certificates downloaded and verified"
+if (( DRY_RUN )); then
+  info "Dry run: skipped downloading ${#STALE_CERTS[@]} certificate(s)"
+else
+  success "All certificates downloaded and verified"
+fi
 
 # ---- Installing certificates ------------------------------------------------
 
@@ -411,6 +452,7 @@ BACKUP_SUFFIX=".bak.$(date +%Y%m%d%H%M%S)"
 
 for host in "${STALE_HOSTS[@]:-}"; do
   [[ -n "$host" ]] || continue
+  (( DRY_RUN )) && continue
   cert="${CERT_BY_HOST[$host]}"
   target_dir="$CERT_DIR/$host"
   install -d -m 0750 -o root -g root "$target_dir"
@@ -423,13 +465,19 @@ for host in "${STALE_HOSTS[@]:-}"; do
   install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
   info "$host -> $target_dir ($cert, ${CERT_FINGERPRINT[$cert]})"
 done
-success "Installed certificates for ${#STALE_HOSTS[@]} host(s)"
+if (( DRY_RUN )); then
+  info "Dry run: skipped installing certificates for ${#STALE_HOSTS[@]} host(s)"
+else
+  success "Installed certificates for ${#STALE_HOSTS[@]} host(s)"
+fi
 
 # ---- Validating site configuration ------------------------------------------
 
 step "Validating site configuration"
-# A config file can only carry one certificate pair, so map each file to a single host
+# The rewrite is file-wide, so a file serving hosts that need different certificates
+# cannot be edited safely and is skipped rather than given one host's certificate
 declare -A FILE_HOST
+declare -A CONFLICT_FILES
 for host in "${MATCHED_HOSTS[@]}"; do
   while IFS= read -r conf; do
     [[ -n "$conf" ]] || continue
@@ -437,13 +485,16 @@ for host in "${MATCHED_HOSTS[@]}"; do
     if [[ -z "$existing" ]]; then
       FILE_HOST["$conf"]="$host"
     elif [[ "${CERT_BY_HOST[$existing]}" != "${CERT_BY_HOST[$host]}" ]]; then
-      warn "$conf serves hosts needing different certificates ($existing, $host) - keeping $existing"
+      CONFLICT_FILES["$conf"]=1
+      warn "$conf serves hosts needing different certificates ($existing, $host) - skipping, split it into one file per site"
     fi
   done < <(awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP")
 done
 
 TARGET_FILES=()
-if (( ${#FILE_HOST[@]} > 0 )); then TARGET_FILES=("${!FILE_HOST[@]}"); fi
+for conf in "${!FILE_HOST[@]}"; do
+  [[ -n "${CONFLICT_FILES[$conf]:-}" ]] || TARGET_FILES+=("$conf")
+done
 
 # Rewrites are staged in the temp dir first so nothing is touched until every file validates
 STAGE_DIR="$TMP_DIR/stage"
@@ -453,6 +504,7 @@ PENDING_FILES=()
 NO_TLS_FILES=()
 APPENDED_FILES=()
 STAGE_INDEX=0
+TLS_ACTION=""
 
 # Gives a config file a working TLS vhost: injects the certificate directives into an
 # existing TLS listener, or generates a whole vhost when the site is HTTP-only
@@ -461,14 +513,27 @@ append_tls_block() {
 
   if [[ "$WEB_SERVER" == "nginx" ]]; then
     if grep -qE '^[[:space:]]*listen[[:space:]].*ssl' "$conf"; then
+      # Inserted after the last of the consecutive listen directives, so an
+      # IPv4/IPv6 pair is not split apart
       awk -v fc="$fullchain" -v pk="$privkey" '
-        { print }
-        !done && /^[[:space:]]*listen[[:space:]]/ && /ssl/ {
-          match($0, /^[[:space:]]*/)
-          indent = substr($0, 1, RLENGTH)
-          print indent "ssl_certificate " fc ";"
-          print indent "ssl_certificate_key " pk ";"
-          done = 1
+        { lines[NR] = $0 }
+        END {
+          for (i = 1; i <= NR; i++) {
+            if (!at && lines[i] ~ /^[[:space:]]*listen[[:space:]]/ && lines[i] ~ /ssl/) {
+              j = i
+              while (j + 1 <= NR && lines[j + 1] ~ /^[[:space:]]*listen[[:space:]]/) j++
+              at = j
+            }
+          }
+          for (i = 1; i <= NR; i++) {
+            print lines[i]
+            if (i == at) {
+              match(lines[i], /^[[:space:]]*/)
+              indent = substr(lines[i], 1, RLENGTH)
+              print indent "ssl_certificate " fc ";"
+              print indent "ssl_certificate_key " pk ";"
+            }
+          }
         }
       ' "$conf" > "$staged"
       TLS_ACTION="certificate directives added to existing ssl listener"
@@ -553,10 +618,7 @@ for conf in "${TARGET_FILES[@]}"; do
       NO_TLS_FILES+=("$conf")
       continue
     fi
-    if ! append_tls_block "$conf" "$cert_host" "$fullchain" "$privkey" "$staged"; then
-      NO_TLS_FILES+=("$conf")
-      continue
-    fi
+    append_tls_block "$conf" "$cert_host" "$fullchain" "$privkey" "$staged"
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
     APPENDED_FILES+=("$conf")
@@ -592,6 +654,12 @@ if (( ${#NO_TLS_FILES[@]} > 0 )); then
 fi
 
 success "Validated ${#TARGET_FILES[@]} config file(s), ${#PENDING_FILES[@]} to update (${#APPENDED_FILES[@]} new TLS vhost(s))"
+
+if (( DRY_RUN )); then
+  step "Done"
+  success "Dry run complete, nothing was changed"
+  exit 0
+fi
 
 if (( ${#STALE_HOSTS[@]} == 0 && ${#PENDING_FILES[@]} == 0 )); then
   step "Done"
@@ -672,14 +740,22 @@ success "Configuration applied and config test passed"
 
 step "Reloading $WEB_SERVER"
 if [[ "$WEB_SERVER" == "nginx" ]]; then
-  systemctl reload nginx >>"$LOG_FILE" 2>&1 || nginx -s reload >>"$LOG_FILE" 2>&1 \
-    || { rollback; fail "nginx reload failed, see $LOG_FILE"; }
+  WEB_SERVICE=nginx
 else
-  APACHE_SERVICE=$(systemctl list-units --type=service --all --no-legend 'apache2.service' 'httpd.service' 2>/dev/null | awk '{print $1}' | head -n1)
-  systemctl reload "${APACHE_SERVICE:-apache2}" >>"$LOG_FILE" 2>&1 \
-    || { rollback; fail "Apache reload failed, see $LOG_FILE"; }
+  WEB_SERVICE=$(systemctl list-units --type=service --all --no-legend 'apache2.service' 'httpd.service' 2>/dev/null | awk '{print $1}' | head -n1)
+  WEB_SERVICE="${WEB_SERVICE:-apache2}"
 fi
-success "$WEB_SERVER reloaded"
+
+# A stopped server is not a failure - the certificates are in place and will be
+# picked up whenever it is started, so there is nothing to roll back
+if ! systemctl is-active --quiet "$WEB_SERVICE"; then
+  warn "$WEB_SERVICE is not running, skipping reload - certificates are installed and will apply on next start"
+elif systemctl reload "$WEB_SERVICE" >>"$LOG_FILE" 2>&1; then
+  success "$WEB_SERVER reloaded"
+else
+  rollback
+  fail "$WEB_SERVER reload failed, see $LOG_FILE"
+fi
 
 # Remove superseded backups only after the new certificates are confirmed live
 for host in "${STALE_HOSTS[@]:-}"; do
