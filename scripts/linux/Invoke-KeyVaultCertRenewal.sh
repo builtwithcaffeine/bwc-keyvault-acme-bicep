@@ -7,6 +7,11 @@
 #
 set -euo pipefail
 
+# Parsing of openssl (notAfter=, sha256 Fingerprint=) and date output must not vary by locale
+export LC_ALL=C
+# Lock file, temp cert/key material and az scratch files are owner-only by default
+umask 077
+
 # ---- Configuration ----------------------------------------------------------
 
 KEY_VAULT_NAME="${KEY_VAULT_NAME:-}"     # empty = auto-detect the single accessible vault
@@ -51,6 +56,19 @@ TMP_DIR="$(mktemp -d)"
 chmod 0700 "$TMP_DIR"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
+
+# Runs an az query into a file, exposing the CLI's own error text in AZ_ERROR -
+# without this a permissions failure is indistinguishable from an empty result
+AZ_ERROR=""
+az_tsv() {
+  local out="$1"; shift
+  local err="$TMP_DIR/az-err.txt"
+  AZ_ERROR=""
+  if az "$@" -o tsv > "$out" 2>"$err"; then return 0; fi
+  cat "$err" >> "$LOG_FILE"
+  AZ_ERROR="$(tr '\n' ' ' < "$err" | tr -s ' ' | cut -c1-300)"
+  return 1
+}
 
 # ---- Ensuring log rotation --------------------------------------------------
 
@@ -108,8 +126,10 @@ step "Authenticating to Azure"
 if ! az account show >/dev/null 2>&1; then
   info "Logging in using managed identity..."
   if [[ -n "$AZURE_CLIENT_ID" ]]; then
+    # --client-id replaced --username in newer Azure CLI releases; try both
     az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
-      || fail "az login --identity --client-id $AZURE_CLIENT_ID failed, see $LOG_FILE"
+      || az login --identity --username "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+      || fail "az login --identity for $AZURE_CLIENT_ID failed, see $LOG_FILE"
     info "Using user-assigned identity: $AZURE_CLIENT_ID"
   else
     az login --identity >/dev/null 2>>"$LOG_FILE" \
@@ -181,9 +201,10 @@ if [[ "$WEB_SERVER" == "nginx" ]]; then
     cat "$TMP_DIR/nginx-err.txt" >> "$LOG_FILE"
     warn "nginx -T failed: $(head -n 3 "$TMP_DIR/nginx-err.txt" | tr '\n' ' ')"
     warn "Falling back to scanning /etc/nginx for server names"
+    # -R (not -r) so the symlinks in sites-enabled are followed
     while IFS= read -r conf; do
       parse_server_names "$conf" "$conf"
-    done < <(grep -rlE '^[[:space:]]*server_name[[:space:]]' /etc/nginx 2>/dev/null || true) \
+    done < <(grep -RlE '^[[:space:]]*server_name[[:space:]]' /etc/nginx 2>/dev/null || true) \
       | sort -u > "$VHOST_MAP"
   fi
 else
@@ -205,7 +226,7 @@ else
     APACHE_ROOT=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
     while IFS= read -r conf; do
       parse_server_names "$conf" "$conf"
-    done < <(grep -rlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
+    done < <(grep -RlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
       | sort -u > "$VHOST_MAP"
   fi
 fi
@@ -224,7 +245,9 @@ step "Locating Key Vault"
 if [[ -n "$KEY_VAULT_NAME" ]]; then
   info "Using manual override"
 else
-  mapfile -t VAULTS < <(az keyvault list --query '[].name' -o tsv 2>>"$LOG_FILE" | grep -v '^$' || true)
+  az_tsv "$TMP_DIR/vaults.txt" keyvault list --query '[].name' \
+    || fail "az keyvault list failed: $AZ_ERROR"
+  mapfile -t VAULTS < <(grep -v '^$' "$TMP_DIR/vaults.txt" || true)
   (( ${#VAULTS[@]} > 0 )) || fail "No Key Vault accessible to this managed identity"
   (( ${#VAULTS[@]} == 1 )) || fail "Expected exactly one accessible Key Vault, found ${#VAULTS[@]}: ${VAULTS[*]}"
   KEY_VAULT_NAME="${VAULTS[0]}"
@@ -234,7 +257,9 @@ success "Using Key Vault: $KEY_VAULT_NAME"
 # ---- Matching certificates --------------------------------------------------
 
 step "Matching certificates"
-mapfile -t VAULT_CERTS < <(az keyvault certificate list --vault-name "$KEY_VAULT_NAME" --query '[].name' -o tsv 2>>"$LOG_FILE" | grep -v '^$' || true)
+az_tsv "$TMP_DIR/certs.txt" keyvault certificate list --vault-name "$KEY_VAULT_NAME" --query '[].name' \
+  || fail "Cannot list certificates in $KEY_VAULT_NAME - the identity likely lacks the 'Key Vault Certificate User' role: $AZ_ERROR"
+mapfile -t VAULT_CERTS < <(grep -v '^$' "$TMP_DIR/certs.txt" || true)
 (( ${#VAULT_CERTS[@]} > 0 )) || fail "No certificates found in $KEY_VAULT_NAME"
 info "Key Vault holds ${#VAULT_CERTS[@]} certificate(s)"
 
@@ -306,14 +331,14 @@ for cert in "${MATCHED_CERTS[@]}"; do
   openssl x509 -inform DER -in "$TMP_DIR/$cert.der" -out "$TMP_DIR/$cert.vault.pem" \
     || fail "Could not parse certificate data for $cert"
 
-  CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
   CERT_EXPIRY["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
   CERT_DAYS["$cert"]=$(( ($(date -d "${CERT_EXPIRY[$cert]}" +%s) - $(date +%s)) / 86400 ))
   (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Vault certificate '$cert' has already expired"
 
   local_fingerprint=""
   if [[ -f "$CERT_DIR/$cert/fullchain.pem" ]]; then
-    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$cert/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
+    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$cert/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2- || true)"
   fi
 
   if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
@@ -352,13 +377,12 @@ for cert in "${STALE_CERTS[@]:-}"; do
   base64 -d < "$pfx_b64" > "$pfx_file" || fail "Could not decode PFX data for $cert"
   shred -u "$pfx_b64" 2>/dev/null || rm -f "$pfx_b64"
 
-  pkcs12 -in "$pfx_file" -nokeys -clcerts -out "$TMP_DIR/$cert.leaf.pem" || fail "Could not extract certificate from PFX for $cert"
-  pkcs12 -in "$pfx_file" -nokeys -cacerts -out "$TMP_DIR/$cert.chain.pem" || true
+  # -nokeys emits the leaf plus any chain certs in one pass, which is exactly a fullchain
+  pkcs12 -in "$pfx_file" -nokeys -out "$TMP_DIR/$cert.chainbag.pem" || fail "Could not extract certificate from PFX for $cert"
   pkcs12 -in "$pfx_file" -nocerts -nodes -out "$TMP_DIR/$cert.rawkey.pem" || fail "Could not extract private key from PFX for $cert"
   shred -u "$pfx_file" 2>/dev/null || rm -f "$pfx_file"
 
-  strip_pem "$TMP_DIR/$cert.leaf.pem" > "$TMP_DIR/$cert.fullchain.pem"
-  if [[ -s "$TMP_DIR/$cert.chain.pem" ]]; then strip_pem "$TMP_DIR/$cert.chain.pem" >> "$TMP_DIR/$cert.fullchain.pem"; fi
+  strip_pem "$TMP_DIR/$cert.chainbag.pem" > "$TMP_DIR/$cert.fullchain.pem"
   strip_pem "$TMP_DIR/$cert.rawkey.pem" > "$TMP_DIR/$cert.privkey.pem"
 
   new_fingerprint="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
