@@ -16,7 +16,7 @@ umask 077
 
 KEY_VAULT_NAME="${KEY_VAULT_NAME:-}"     # empty = auto-detect the single accessible vault
 AZURE_CLIENT_ID="${AZURE_CLIENT_ID:-}"   # empty = system-assigned identity
-CERT_DIR="${CERT_DIR:-/etc/ssl/keyvault}"
+CERT_DIR="${CERT_DIR:-/etc/ssl}"        # certificates are installed to <CERT_DIR>/<fqdn>/
 LOG_FILE="/var/log/keyvault-acme-update.log"
 LOCK_FILE="/var/run/keyvault-acme-update.lock"
 LOGROTATE_FILE="/etc/logrotate.d/keyvault-acme-update"
@@ -320,7 +320,7 @@ success "Matched ${#MATCHED_HOSTS[@]} host(s) to ${#MATCHED_CERTS[@]} certificat
 
 step "Checking certificate status"
 declare -A CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
-STALE_CERTS=()
+STALE_HOSTS=()
 
 for cert in "${MATCHED_CERTS[@]}"; do
   # Uses only the public certificate (cer) - no secret access, no local changes
@@ -335,25 +335,34 @@ for cert in "${MATCHED_CERTS[@]}"; do
   CERT_EXPIRY["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
   CERT_DAYS["$cert"]=$(( ($(date -d "${CERT_EXPIRY[$cert]}" +%s) - $(date +%s)) / 86400 ))
   (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Vault certificate '$cert' has already expired"
+done
 
+# Each FQDN gets its own directory, so a certificate shared by several hosts
+# is compared - and installed - once per host
+for host in "${MATCHED_HOSTS[@]}"; do
+  cert="${CERT_BY_HOST[$host]}"
   local_fingerprint=""
-  if [[ -f "$CERT_DIR/$cert/fullchain.pem" ]]; then
-    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$cert/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2- || true)"
+  if [[ -f "$CERT_DIR/$host/fullchain.pem" ]]; then
+    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$host/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2- || true)"
   fi
 
   if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
-    info "$cert: up to date (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+    info "$host: up to date (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
   else
-    STALE_CERTS+=("$cert")
-    info "$cert: needs update (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+    STALE_HOSTS+=("$host")
+    info "$host: needs update (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
   fi
 done
 
-success "${#STALE_CERTS[@]} of ${#MATCHED_CERTS[@]} certificate(s) need updating"
+STALE_CERTS=()
+if (( ${#STALE_HOSTS[@]} > 0 )); then
+  mapfile -t STALE_CERTS < <(for host in "${STALE_HOSTS[@]}"; do echo "${CERT_BY_HOST[$host]}"; done | sort -u)
+fi
+success "${#STALE_HOSTS[@]} of ${#MATCHED_HOSTS[@]} host(s) need a new certificate"
 
 if (( DRY_RUN )); then
-  for cert in "${STALE_CERTS[@]:-}"; do
-    [[ -n "$cert" ]] && warn "Dry run: $cert would be installed to $CERT_DIR/$cert"
+  for host in "${STALE_HOSTS[@]:-}"; do
+    [[ -n "$host" ]] && warn "Dry run: ${CERT_BY_HOST[$host]} would be installed to $CERT_DIR/$host"
   done
   exit 0
 fi
@@ -404,11 +413,11 @@ success "All certificates downloaded and verified"
 
 step "Installing certificates"
 BACKUP_SUFFIX=".bak.$(date +%Y%m%d%H%M%S)"
-install -d -m 0750 -o root -g root "$CERT_DIR"
 
-for cert in "${STALE_CERTS[@]:-}"; do
-  [[ -n "$cert" ]] || continue
-  target_dir="$CERT_DIR/$cert"
+for host in "${STALE_HOSTS[@]:-}"; do
+  [[ -n "$host" ]] || continue
+  cert="${CERT_BY_HOST[$host]}"
+  target_dir="$CERT_DIR/$host"
   install -d -m 0750 -o root -g root "$target_dir"
 
   # Keep the previous pair so a failed config test can be rolled back
@@ -417,30 +426,29 @@ for cert in "${STALE_CERTS[@]:-}"; do
 
   install -m 0644 -o root -g root "$TMP_DIR/$cert.fullchain.pem" "$target_dir/fullchain.pem"
   install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
-  info "$cert -> $target_dir (${CERT_FINGERPRINT[$cert]})"
+  info "$host -> $target_dir ($cert, ${CERT_FINGERPRINT[$cert]})"
 done
-success "Installed ${#STALE_CERTS[@]} certificate(s)"
+success "Installed certificates for ${#STALE_HOSTS[@]} host(s)"
 
 # ---- Validating site configuration ------------------------------------------
 
 step "Validating site configuration"
-# A config file can only carry one certificate pair, so map each file to a single cert
-declare -A FILE_CERT
+# A config file can only carry one certificate pair, so map each file to a single host
+declare -A FILE_HOST
 for host in "${MATCHED_HOSTS[@]}"; do
-  cert="${CERT_BY_HOST[$host]}"
   while IFS= read -r conf; do
     [[ -n "$conf" ]] || continue
-    existing="${FILE_CERT[$conf]:-}"
+    existing="${FILE_HOST[$conf]:-}"
     if [[ -z "$existing" ]]; then
-      FILE_CERT["$conf"]="$cert"
-    elif [[ "$existing" != "$cert" ]]; then
-      warn "$conf serves hosts needing different certificates ($existing, $cert) - keeping $existing"
+      FILE_HOST["$conf"]="$host"
+    elif [[ "${CERT_BY_HOST[$existing]}" != "${CERT_BY_HOST[$host]}" ]]; then
+      warn "$conf serves hosts needing different certificates ($existing, $host) - keeping $existing"
     fi
   done < <(awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP")
 done
 
 TARGET_FILES=()
-if (( ${#FILE_CERT[@]} > 0 )); then TARGET_FILES=("${!FILE_CERT[@]}"); fi
+if (( ${#FILE_HOST[@]} > 0 )); then TARGET_FILES=("${!FILE_HOST[@]}"); fi
 
 # Rewrites are staged in the temp dir first so nothing is touched until every file validates
 STAGE_DIR="$TMP_DIR/stage"
@@ -457,9 +465,9 @@ for conf in "${TARGET_FILES[@]}"; do
     continue
   fi
 
-  cert="${FILE_CERT[$conf]}"
-  fullchain="$CERT_DIR/$cert/fullchain.pem"
-  privkey="$CERT_DIR/$cert/privkey.pem"
+  cert_host="${FILE_HOST[$conf]}"
+  fullchain="$CERT_DIR/$cert_host/fullchain.pem"
+  privkey="$CERT_DIR/$cert_host/privkey.pem"
   staged="$STAGE_DIR/$((STAGE_INDEX++)).conf"
 
   if [[ "$WEB_SERVER" == "nginx" ]]; then
@@ -476,17 +484,17 @@ for conf in "${TARGET_FILES[@]}"; do
   fi
 
   if cmp -s "$conf" "$staged"; then
-    info "Already current: $conf ($cert)"
+    info "Already current: $conf ($cert_host)"
   else
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
-    info "Pending update: $conf ($cert)"
+    info "Pending update: $conf ($cert_host)"
   fi
 done
 
 success "Validated ${#TARGET_FILES[@]} config file(s), ${#PENDING_FILES[@]} to update"
 
-if (( ${#STALE_CERTS[@]} == 0 && ${#PENDING_FILES[@]} == 0 )); then
+if (( ${#STALE_HOSTS[@]} == 0 && ${#PENDING_FILES[@]} == 0 )); then
   step "Done"
   success "All certificates and site configuration are already up to date, nothing to do."
   exit 0
@@ -500,10 +508,10 @@ rollback() {
   for conf in "${TARGET_FILES[@]}"; do
     if [[ -f "$conf$BACKUP_SUFFIX" ]]; then mv -f "$conf$BACKUP_SUFFIX" "$conf"; fi
   done
-  for cert in "${STALE_CERTS[@]:-}"; do
-    [[ -n "$cert" ]] || continue
-    if [[ -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/fullchain.pem"; fi
-    if [[ -f "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/privkey.pem"; fi
+  for host in "${STALE_HOSTS[@]:-}"; do
+    [[ -n "$host" ]] || continue
+    if [[ -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/fullchain.pem"; fi
+    if [[ -f "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/privkey.pem"; fi
   done
 }
 
@@ -540,8 +548,8 @@ fi
 success "$WEB_SERVER reloaded"
 
 # Remove superseded backups only after the new certificates are confirmed live
-for cert in "${STALE_CERTS[@]:-}"; do
-  [[ -n "$cert" ]] && rm -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX"
+for host in "${STALE_HOSTS[@]:-}"; do
+  [[ -n "$host" ]] && rm -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX"
 done
 for conf in "${TARGET_FILES[@]}"; do rm -f "$conf$BACKUP_SUFFIX"; done
 
@@ -552,7 +560,7 @@ info "Key Vault:  $KEY_VAULT_NAME"
 info "Web server: $WEB_SERVER"
 for host in "${MATCHED_HOSTS[@]}"; do
   cert="${CERT_BY_HOST[$host]}"
-  info "$host -> $cert (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days) $CERT_DIR/$cert"
+  info "$host -> $CERT_DIR/$host ($cert, expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
 done
 info "Log:        $LOG_FILE"
-success "Updated ${#STALE_CERTS[@]} certificate(s) across ${#TARGET_FILES[@]} site config(s), $WEB_SERVER reloaded"
+success "Updated ${#STALE_HOSTS[@]} host(s) across ${#TARGET_FILES[@]} site config(s), $WEB_SERVER reloaded"
