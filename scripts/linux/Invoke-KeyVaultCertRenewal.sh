@@ -524,13 +524,43 @@ success "Using Key Vault: ${KEYVAULT_NAME}"
 
 declare -A CERT_SAN_CACHE=()
 declare -A CERT_SAN_LOADED=()
+declare -A CERT_DER_CACHE=()
+CERT_LOAD_ERROR=''
 
 load_certificate_sans() {
-  local name=$1 normalized
-  az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${name}" \
-    --query 'policy.x509CertificateProperties.subjectAlternativeNames.dnsNames' -o tsv || return $?
-  normalized=$(printf '%s\n' "${AZ_OUTPUT}" | tr '\t\r' '\n\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | sort -u)
+  local name=$1 normalized der_file san_text openssl_error
+  CERT_LOAD_ERROR=''
+  der_file="${RUN_DIR}/${name}.match.der"
+
+  if ! az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${name}" \
+    --query cer -o tsv; then
+    CERT_LOAD_ERROR=$(az_error)
+    return 1
+  fi
+  if [[ -z "${AZ_OUTPUT}" ]]; then
+    CERT_LOAD_ERROR='Azure returned no public certificate data'
+    return 1
+  fi
+  if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${der_file}"; then
+    AZ_OUTPUT=''
+    CERT_LOAD_ERROR='Azure returned invalid base64 public-certificate data'
+    return 1
+  fi
+  AZ_OUTPUT=''
+
+  if ! openssl_error=$(openssl x509 -inform DER -in "${der_file}" -noout 2>&1); then
+    CERT_LOAD_ERROR="Could not parse the issued certificate: ${openssl_error}"
+    return 1
+  fi
+  if ! san_text=$(openssl x509 -inform DER -in "${der_file}" -noout -ext subjectAltName 2>&1); then
+    CERT_LOAD_ERROR="Could not read the issued certificate SAN extension: ${san_text}"
+    return 1
+  fi
+  normalized=$(grep -oE 'DNS:[^,[:space:]]+' <<<"${san_text}" \
+    | sed 's/^DNS://' | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | sort -u || true)
+
   CERT_SAN_CACHE["${name}"]=${normalized}
+  CERT_DER_CACHE["${name}"]=${der_file}
   CERT_SAN_LOADED["${name}"]=1
 }
 
@@ -560,11 +590,11 @@ add_certificate_mapping() {
   fi
 }
 
-step 'Mapping server names to Key Vault certificates'
+step 'Matching web-server names against issued certificate SANs'
 if [[ -n "${CERT_NAME}" ]]; then
   validate_certificate_name "${CERT_NAME}" || fail "Invalid Key Vault certificate name: ${CERT_NAME}"
   load_certificate_sans "${CERT_NAME}" \
-    || fail "Could not inspect certificate '${CERT_NAME}': $(az_error)"
+    || fail "Could not inspect certificate '${CERT_NAME}': ${CERT_LOAD_ERROR}"
   override_match_count=0
   for server_name in "${SERVER_NAMES[@]}"; do
     if certificate_covers_server "${CERT_NAME}" "${server_name}"; then
@@ -578,7 +608,7 @@ if [[ -n "${CERT_NAME}" ]]; then
 else
   if ! az_call keyvault certificate list --vault-name "${KEYVAULT_NAME}" --query '[].name' -o tsv; then
     if [[ "${AZ_STDERR}" == *CERTIFICATE_VERIFY_FAILED* || "${AZ_STDERR}" == *'Hostname mismatch'* ]]; then
-      warn "Key Vault TLS hostname validation failed. Check DNS/private-endpoint routing and HTTPS_PROXY; do not disable certificate verification."
+      warn "Azure CLI could not validate the Key Vault API endpoint '${KEYVAULT_NAME}.vault.azure.net'. This transport-TLS check is separate from matching nginx/Apache SNI names to certificate SANs. Check DNS/private-endpoint routing and HTTPS_PROXY; do not disable certificate verification."
     fi
     fail "Could not list certificates in '${KEYVAULT_NAME}': $(az_error)"
   fi
@@ -592,12 +622,11 @@ else
     fi
     if ! load_certificate_sans "${vault_cert_name}"; then
       warn "Could not inspect certificate '${vault_cert_name}'; enable DEBUG=1 for command diagnostics"
-      debug "Azure error for '${vault_cert_name}': $(az_error)"
+      debug "Certificate inspection error for '${vault_cert_name}': ${CERT_LOAD_ERROR}"
     fi
   done
 
   for server_name in "${SERVER_NAMES[@]}"; do
-    expected_cert_name=${server_name//./-}
     declare -a server_candidates=()
     for vault_cert_name in "${VAULT_CERT_NAMES[@]}"; do
       [[ "${CERT_SAN_LOADED[${vault_cert_name}]:-0}" -eq 1 ]] || continue
@@ -610,24 +639,13 @@ else
       fail "No Key Vault certificate covers configured server name '${server_name}'"
     fi
 
-    selected_for_server=''
-    for candidate in "${server_candidates[@]}"; do
-      if [[ "${candidate}" == "${expected_cert_name}" ]]; then
-        selected_for_server=${candidate}
-        break
-      fi
-    done
-
-    if [[ -z "${selected_for_server}" ]]; then
-      if [[ "${#server_candidates[@]}" -eq 1 ]]; then
-        selected_for_server=${server_candidates[0]}
-      else
-        fail "Multiple certificates cover '${server_name}' (${server_candidates[*]}), and none is named '${expected_cert_name}'. Set CERT_NAME explicitly or make the mapping unambiguous."
-      fi
+    if [[ "${#server_candidates[@]}" -gt 1 ]]; then
+      fail "Multiple issued certificates contain a SAN covering '${server_name}' (${server_candidates[*]}). Set CERT_NAME explicitly or remove the duplicate certificate."
     fi
 
+    selected_for_server=${server_candidates[0]}
     add_certificate_mapping "${selected_for_server}" "${server_name}"
-    success "Mapped ${server_name} -> ${selected_for_server}"
+    success "Matched SAN ${server_name} in certificate '${selected_for_server}'"
   done
 fi
 
@@ -689,6 +707,7 @@ process_certificate() {
   local concrete_host_count=0 mapped_server_name
   local had_cert=0 had_key=0 backup_dir=''
   local staged_cert staged_key
+  local cached_vault_der
 
   if [[ -L "${cert_dir}" ]]; then
     fail "Refusing to use symlink as certificate directory: ${cert_dir}"
@@ -704,14 +723,10 @@ process_certificate() {
   info "Certificate path: ${cert_file}"
   info "Private-key path: ${key_file}"
 
-  az_call keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${cert_name}" --query cer -o tsv \
-    || fail "Could not read public certificate '${cert_name}': $(az_error)"
-  [[ -n "${AZ_OUTPUT}" ]] || fail "Certificate '${cert_name}' returned no public certificate data"
-  if ! printf '%s' "${AZ_OUTPUT}" | base64 --decode > "${vault_der}"; then
-    AZ_OUTPUT=''
-    fail "Certificate '${cert_name}' contains invalid base64 public-certificate data"
-  fi
-  AZ_OUTPUT=''
+  cached_vault_der=${CERT_DER_CACHE[${cert_name}]:-}
+  [[ -n "${cached_vault_der}" && -f "${cached_vault_der}" ]] \
+    || fail "Public-certificate cache is missing for '${cert_name}'"
+  cp -- "${cached_vault_der}" "${vault_der}"
 
   if ! vault_cert_info=$(openssl x509 -inform DER -in "${vault_der}" -noout \
     -startdate -enddate -fingerprint -sha256 2>&1); then
@@ -736,8 +751,8 @@ process_certificate() {
     warn "Certificate '${cert_name}' expires in fewer than ${EXPIRY_WARN_DAYS} days"
   fi
 
-  # Validate every concrete mapping against the issued certificate, not just the
-  # Key Vault policy. This also protects the no-op path when files are current.
+  # Re-check every concrete mapping directly against the issued certificate.
+  # This also protects the no-op path when local files are already current.
   while IFS= read -r mapped_server_name; do
     [[ -n "${mapped_server_name}" ]] || continue
     [[ "${mapped_server_name}" == '*.'* ]] && continue
@@ -746,7 +761,7 @@ process_certificate() {
       || fail "Certificate '${cert_name}' does not cover mapped server name '${mapped_server_name}'"
   done <<<"${CERT_SERVER_LIST[${cert_name}]:-}"
   if [[ "${concrete_host_count}" -eq 0 ]]; then
-    warn "Could not validate a concrete hostname for '${cert_name}'; relying on Key Vault SAN policy"
+    warn "No concrete hostname was available for '${cert_name}'; relying on the issued-certificate SAN comparison"
   fi
 
   if [[ -f "${cert_file}" ]]; then
