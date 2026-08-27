@@ -86,6 +86,8 @@ sudo systemctl enable --now keyvault-cert-renewal.timer
 
 If the VM has more than one managed identity, uncomment `Environment=AZURE_CLIENT_ID=...` in the service unit so the right one is used.
 
+The service unit is sandboxed (`NoNewPrivileges`, `ProtectHome`, `PrivateTmp`, kernel and address-family restrictions). Because `ProtectHome=true` makes `/root` inaccessible, `AZURE_CONFIG_DIR` points the Azure CLI at a `RuntimeDirectory` under `/run` instead - which also means the token cache is discarded when the unit stops. `ProtectSystem` is deliberately left unset, since the script installs the Azure CLI into `/usr` on first run if it is missing.
+
 Verify:
 
 ```bash
@@ -148,3 +150,5 @@ Output goes to the console and to `/var/log/keyvault-acme-update.log`:
 | `nginx -T failed` warning | The live config is invalid; the script falls back to scanning `sites-enabled` and still installs certificates, but cannot reload until you fix it. |
 | `serves hosts needing different certificates` | One config file contains vhosts for hosts using different certificates - split it. |
 | `is not running, skipping reload` | The web server is stopped. Certificates are installed and apply on next start. |
+| `another run is already in progress` | A previous run still holds the lock. Check for a hung run before the next timer fires. |
+| Auth fails under systemd but works by hand | `AZURE_CONFIG_DIR` is not reaching the unit - confirm the `RuntimeDirectory` lines are present, since `ProtectHome=true` blocks `/root/.azure`. |
