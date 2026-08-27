@@ -29,6 +29,7 @@ The template normalizes the tag and builds the correct package URL automatically
 - This is the initial deployment path for the environment.
 - The Key Vault uses Access Policies by design to support the Application Gateway certificate scenario.
 - The `dependsOn` helpers are intentionally retained as visual guidance for engineers.
+- When GitHub Actions federation is enabled, opt this repository into GitHub's immutable OIDC subject format; the setting is outside Bicep and must be configured in GitHub repository settings.
 
 ---
 

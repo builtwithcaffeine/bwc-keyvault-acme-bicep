@@ -105,6 +105,33 @@ flowchart LR
 - Azure CLI + Bicep CLI
 - PowerShell 7+
 
+### GitHub Actions OIDC federation
+
+The optional GitHub Actions federation credential is enabled in
+`infra/create/param.main.bicepparam`. It is created on the Acmebot user-assigned
+managed identity and uses GitHub's immutable repository subject, including the
+repository and owner IDs.
+
+Because GitHub repository settings are outside Bicep, enable immutable OIDC
+subjects for this repository before running the update workflow:
+
+1. Open **Repository Settings → Actions → General → OIDC subject customization**.
+2. Enable the immutable subject format for `builtwithcaffeine/bwc-keyvault-acme-bicep`.
+3. Configure the workflow secrets `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` using
+  the outputs from the create deployment.
+
+The expected branch subject is:
+
+`repo:builtwithcaffeine@141853123/bwc-keyvault-acme-bicep@905440910:ref:refs/heads/main`
+
+The GitHub repository setting must be enabled before the first OIDC login; otherwise,
+GitHub issues the legacy name-based subject and Azure rejects the token.
+
+When federation is enabled, the create template grants the Acmebot managed
+identity the built-in **Contributor** role at the Acmebot resource-group scope.
+This is required because the update workflow runs an ARM resource-group
+deployment, including `Microsoft.Resources/deployments/validate/action`.
+
 ### 1) Review `infra/create/param.main.bicepparam`
 
 Key settings to validate first:
@@ -121,6 +148,10 @@ Key settings to validate first:
 - `acmebotReleaseTag` (shared by create/update; set `latest` or a pinned version like `5.0.0`)
 
 For package redeployments, see `infra/update/Invoke-AzDeployment.ps1` and `infra/update/param.main.bicepparam`; the same `acmebotReleaseTag` convention applies.
+
+The GitHub Actions update workflow requires the existing Function App name,
+its resource group name, and subscription ID. Supplying the resource group
+explicitly avoids requiring subscription-wide resource enumeration permissions.
 
 Supported ACME endpoints in this template:
 
@@ -174,6 +205,7 @@ az functionapp config appsettings list -g <resource-group> -n <function-app-name
 - Keep DNS credentials and secrets out of source control
 - Storage Account uses managed identity authentication — shared key access is disabled (`allowSharedKeyAccess: false`); no connection strings are stored or exported
 - Storage Account uses infrastructure encryption (`requireInfrastructureEncryption: true`) for double-layer at-rest encryption
+- The update workflow temporarily allows only the GitHub-hosted runner IP for its smoke test, then removes the rule and restores the Function App's original public network setting
 
 - For private DNS-heavy environments, consider setting `acmeBotUseSystemNameServer = true`
 - Restrict dashboard/API access via Entra and app roles where appropriate

@@ -4,7 +4,7 @@ This folder contains the Bicep entrypoint used to redeploy the Acmebot package i
 
 ## What it does
 
-- Targets an existing Azure Function App by name and discovers its resource group automatically
+- Targets an existing Azure Function App by name and resource group
 - Downloads the Acmebot release ZIP from GitHub
 - Uses the `Microsoft.Web/sites/extensions` OneDeploy path to push the package
 - Keeps the platform resources created by `infra/create` intact
@@ -33,7 +33,7 @@ param functionAppName = 'func-bwc-kvacme-dev-weu'
 param acmebotReleaseTag = 'latest'
 ```
 
-The wrapper script accepts the same `functionAppName` plus the subscription ID, and it can use the Function App's own location if you do not pass `location`.
+The wrapper script accepts the same `functionAppName`, resource group, and subscription ID, and it can use the Function App's own location if you do not pass `location`.
 
 ## Notes
 
