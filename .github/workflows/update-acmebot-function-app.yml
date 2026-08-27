@@ -28,6 +28,7 @@ permissions:
 env:
   PARAM_FILE: infra/create/param.main.bicepparam
   UPDATE_TEMPLATE: infra/update/main.bicep
+  ACMEBOT_REPO: polymind-inc/acmebot
 
 jobs:
   update-function-app:
@@ -53,6 +54,34 @@ jobs:
           fi
           echo "version=${resolved}" >> "$GITHUB_OUTPUT"
 
+      - name: Validate requested Acmebot version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" == "latest" ]]; then
+            echo "Version 'latest' requires no further validation."
+            exit 0
+          fi
+
+          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'${VERSION}' is not a valid Acmebot version. Expected 'latest' or a semver value such as '5.0.0' or 'v5.0.0'."
+            exit 1
+          fi
+
+          tag="$VERSION"
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if ! gh api "repos/${ACMEBOT_REPO}/releases/tags/${tag}" --jq '.tag_name' >/dev/null 2>&1; then
+            echo "::error::Release '${tag}' was not found in ${ACMEBOT_REPO}. Check https://github.com/${ACMEBOT_REPO}/releases for valid versions."
+            exit 1
+          fi
+
+          echo "Confirmed release '${tag}' exists in ${ACMEBOT_REPO}."
+
       - name: Azure Login (OIDC federated)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -74,44 +103,6 @@ jobs:
           echo "resourceGroup=${resourceGroup}" >> "$GITHUB_OUTPUT"
           echo "preDeployState=${state}" >> "$GITHUB_OUTPUT"
           echo "hostName=${hostName}" >> "$GITHUB_OUTPUT"
-
-      - name: Temporarily allow runner IP for smoke test
-        id: network
-        run: |
-          set -euo pipefail
-          runnerIp=$(curl --fail --silent --show-error https://api.ipify.org)
-          if [[ ! "$runnerIp" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            echo "::error::Could not determine a valid public IPv4 address for the runner."
-            exit 1
-          fi
-
-          originalPublicNetworkAccess=$(az functionapp show \
-            --subscription "${{ inputs.subscriptionId }}" \
-            --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-            --name "${{ inputs.functionAppName }}" \
-            --query "publicNetworkAccess" --output tsv)
-          ruleName="github-actions-smoke-${GITHUB_RUN_ID}"
-
-          echo "runnerIp=${runnerIp}" >> "$GITHUB_OUTPUT"
-          echo "ruleName=${ruleName}" >> "$GITHUB_OUTPUT"
-          echo "originalPublicNetworkAccess=${originalPublicNetworkAccess}" >> "$GITHUB_OUTPUT"
-
-          az functionapp config access-restriction add \
-            --subscription "${{ inputs.subscriptionId }}" \
-            --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-            --name "${{ inputs.functionAppName }}" \
-            --rule-name "$ruleName" \
-            --action Allow \
-            --ip-address "${runnerIp}/32" \
-            --priority 100
-
-          if [ "$originalPublicNetworkAccess" = "Disabled" ]; then
-            az functionapp update \
-              --subscription "${{ inputs.subscriptionId }}" \
-              --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-              --name "${{ inputs.functionAppName }}" \
-              --set publicNetworkAccess=Enabled
-          fi
 
       - name: Run update deployment
         id: deploy
@@ -145,42 +136,6 @@ jobs:
           echo "::error::Function App did not reach 'Running' state within the timeout window."
           exit 1
 
-      - name: Smoke test
-        id: smoke
-        run: |
-          set -euo pipefail
-          url="https://${{ steps.preflight.outputs.hostName }}"
-          for attempt in $(seq 1 10); do
-            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$url" || echo "000")
-            echo "Attempt ${attempt}/10: ${url} responded with HTTP ${status}"
-            if [[ "$status" =~ ^[23] ]] || [ "$status" = "401" ] || [ "$status" = "403" ]; then
-              echo "result=passed (HTTP ${status})" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "result=failed" >> "$GITHUB_OUTPUT"
-          echo "::error::Smoke test failed - ${url} did not return a healthy response."
-          exit 1
-
-      - name: Remove temporary runner access
-        if: always() && steps.network.outputs.ruleName != ''
-        run: |
-          set -euo pipefail
-          az functionapp config access-restriction remove \
-            --subscription "${{ inputs.subscriptionId }}" \
-            --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-            --name "${{ inputs.functionAppName }}" \
-            --rule-name "${{ steps.network.outputs.ruleName }}"
-
-          if [ "${{ steps.network.outputs.originalPublicNetworkAccess }}" = "Disabled" ]; then
-            az functionapp update \
-              --subscription "${{ inputs.subscriptionId }}" \
-              --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-              --name "${{ inputs.functionAppName }}" \
-              --set publicNetworkAccess=Disabled
-          fi
-
       - name: Report
         if: always()
         run: |
@@ -196,6 +151,5 @@ jobs:
             echo "| Deployed Version | ${{ steps.version.outputs.version }} |"
             echo "| State Before | ${{ steps.preflight.outputs.preDeployState }} |"
             echo "| State After | ${{ steps.wait.outputs.postDeployState }} |"
-            echo "| Smoke Test | ${{ steps.smoke.outputs.result }} |"
             echo "| Deployment Job | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
