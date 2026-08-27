@@ -257,88 +257,57 @@ success "Using Key Vault: $KEY_VAULT_NAME"
 # ---- Matching certificates --------------------------------------------------
 
 step "Matching certificates"
-az_tsv "$TMP_DIR/certs.txt" keyvault certificate list --vault-name "$KEY_VAULT_NAME" --query '[].name' \
-  || fail "Cannot list certificates in $KEY_VAULT_NAME - the identity likely lacks the 'Key Vault Certificate User' role: $AZ_ERROR"
-mapfile -t VAULT_CERTS < <(grep -v '^$' "$TMP_DIR/certs.txt" || true)
-(( ${#VAULT_CERTS[@]} > 0 )) || fail "No certificates found in $KEY_VAULT_NAME"
-info "Key Vault holds ${#VAULT_CERTS[@]} certificate(s)"
-
-declare -A CERT_BY_HOST
-UNRESOLVED=()
-
-# Key Vault names cannot contain dots, so the ACME automation stores
-# site.example.com as site-example-com - try that convention first
-for host in "${SERVER_NAMES[@]}"; do
-  candidate="${host//./-}"
-  for vault_cert in "${VAULT_CERTS[@]}"; do
-    if [[ "${vault_cert,,}" == "${candidate,,}" ]]; then
-      CERT_BY_HOST["$host"]="$vault_cert"
-      break
-    fi
-  done
-  [[ -n "${CERT_BY_HOST[$host]:-}" ]] || UNRESOLVED+=("$host")
-done
-
-if (( ${#UNRESOLVED[@]} > 0 )); then
-  info "Cross-checking SANs for ${#UNRESOLVED[@]} unmatched host(s)"
-  SAN_INDEX="$TMP_DIR/sans.tsv"
-  : > "$SAN_INDEX"
-  for vault_cert in "${VAULT_CERTS[@]}"; do
-    while IFS= read -r san; do
-      [[ -n "$san" ]] && printf '%s\t%s\n' "$vault_cert" "$san" >> "$SAN_INDEX"
-    done < <(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$vault_cert" \
-      --query 'policy.x509CertificateProperties.subjectAlternativeNames.dnsNames' -o tsv 2>>"$LOG_FILE" || true)
-  done
-
-  for host in "${UNRESOLVED[@]}"; do
-    while IFS=$'\t' read -r vault_cert san; do
-      # Translate a SAN (possibly a wildcard, e.g. *.example.com) into an anchored regex
-      san_regex="^$(printf '%s' "$san" | sed -e 's/[].[^$\\/+?(){}|]/\\&/g' -e 's/\*/[^.]+/g')$"
-      if printf '%s' "$host" | grep -Eqi "$san_regex"; then
-        CERT_BY_HOST["$host"]="$vault_cert"
-        break
-      fi
-    done < "$SAN_INDEX"
-  done
-fi
-
+declare -A CERT_BY_HOST CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
 MATCHED_HOSTS=()
+
 for host in "${SERVER_NAMES[@]}"; do
-  if [[ -n "${CERT_BY_HOST[$host]:-}" ]]; then
-    MATCHED_HOSTS+=("$host")
-    info "$host -> ${CERT_BY_HOST[$host]}"
-  else
-    warn "No certificate matches $host"
+  # Key Vault names cannot contain dots, so site.example.com is stored as site-example-com
+  cert="${host//./-}"
+
+  # Reads only the public certificate (cer) - no secret access, no local changes
+  if ! az_tsv "$TMP_DIR/$cert.b64cer" keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'cer'; then
+    case "$AZ_ERROR" in
+      *CERTIFICATE_VERIFY_FAILED*|*SSLError*|*"certificate verify failed"*)
+        # ARM reached the vault but the data plane did not, so this is name resolution
+        # or TLS interception in front of <vault>.vault.azure.net
+        info "$KEY_VAULT_NAME.vault.azure.net resolves to: $(getent hosts "$KEY_VAULT_NAME.vault.azure.net" | awk '{print $1}' | tr '\n' ' ')"
+        fail "TLS validation failed reaching $KEY_VAULT_NAME.vault.azure.net - check private endpoint DNS or an intercepting proxy: $AZ_ERROR" ;;
+      *Forbidden*|*AccessDenied*|*"not authorized"*|*"does not have"*)
+        fail "Access denied reading '$cert' - grant the identity get on certificates and secrets: $AZ_ERROR" ;;
+      *NotFound*|*"not found"*|*CertificateNotFound*)
+        warn "$host: no certificate named '$cert' in $KEY_VAULT_NAME"; continue ;;
+      *)
+        warn "$host: could not read '$cert': $AZ_ERROR"; continue ;;
+    esac
   fi
-done
 
-(( ${#MATCHED_HOSTS[@]} > 0 )) || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
-mapfile -t MATCHED_CERTS < <(for host in "${MATCHED_HOSTS[@]}"; do echo "${CERT_BY_HOST[$host]}"; done | sort -u)
-success "Matched ${#MATCHED_HOSTS[@]} host(s) to ${#MATCHED_CERTS[@]} certificate(s)"
+  if [[ ! -s "$TMP_DIR/$cert.b64cer" ]]; then
+    warn "$host: certificate '$cert' returned no public certificate (cer) data"
+    continue
+  fi
 
-# ---- Checking certificate status --------------------------------------------
-
-step "Checking certificate status"
-declare -A CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
-STALE_HOSTS=()
-
-for cert in "${MATCHED_CERTS[@]}"; do
-  # Uses only the public certificate (cer) - no secret access, no local changes
-  vault_cer_b64="$(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'cer' -o tsv 2>>"$LOG_FILE")"
-  [[ -n "$vault_cer_b64" ]] || fail "Certificate '$cert' returned no public certificate (cer) data"
-
-  printf '%s' "$vault_cer_b64" | base64 -d > "$TMP_DIR/$cert.der" || fail "Could not decode certificate data for $cert"
+  base64 -d < "$TMP_DIR/$cert.b64cer" > "$TMP_DIR/$cert.der" || fail "Could not decode certificate data for $cert"
   openssl x509 -inform DER -in "$TMP_DIR/$cert.der" -out "$TMP_DIR/$cert.vault.pem" \
     || fail "Could not parse certificate data for $cert"
 
   CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
   CERT_EXPIRY["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
   CERT_DAYS["$cert"]=$(( ($(date -d "${CERT_EXPIRY[$cert]}" +%s) - $(date +%s)) / 86400 ))
-  (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Vault certificate '$cert' has already expired"
+  (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Certificate '$cert' has already expired"
+
+  CERT_BY_HOST["$host"]="$cert"
+  MATCHED_HOSTS+=("$host")
+  info "$host -> $cert (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
 done
 
-# Each FQDN gets its own directory, so a certificate shared by several hosts
-# is compared - and installed - once per host
+(( ${#MATCHED_HOSTS[@]} > 0 )) || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
+success "Matched ${#MATCHED_HOSTS[@]} of ${#SERVER_NAMES[@]} host(s)"
+
+# ---- Checking certificate status --------------------------------------------
+
+step "Checking certificate status"
+STALE_HOSTS=()
+
 for host in "${MATCHED_HOSTS[@]}"; do
   cert="${CERT_BY_HOST[$host]}"
   local_fingerprint=""
@@ -347,10 +316,10 @@ for host in "${MATCHED_HOSTS[@]}"; do
   fi
 
   if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
-    info "$host: up to date (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+    info "$host: up to date"
   else
     STALE_HOSTS+=("$host")
-    info "$host: needs update (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+    info "$host: needs update"
   fi
 done
 
