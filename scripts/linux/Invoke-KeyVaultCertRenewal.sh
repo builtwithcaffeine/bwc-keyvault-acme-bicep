@@ -100,7 +100,7 @@ if ! command -v az >/dev/null 2>&1; then
 fi
 command -v az >/dev/null 2>&1 || fail "Azure CLI installation could not be verified."
 command -v openssl >/dev/null 2>&1 || fail "openssl is required but not installed."
-success "Azure CLI available"
+success "Azure CLI Installed"
 
 # ---- Authenticating to Azure ------------------------------------------------
 
@@ -231,133 +231,192 @@ else
 fi
 success "Using Key Vault: $KEY_VAULT_NAME"
 
-# ---- Matching certificate ---------------------------------------------------
+# ---- Matching certificates --------------------------------------------------
 
-step "Matching certificate"
+step "Matching certificates"
 mapfile -t VAULT_CERTS < <(az keyvault certificate list --vault-name "$KEY_VAULT_NAME" --query '[].name' -o tsv 2>>"$LOG_FILE" | grep -v '^$' || true)
 (( ${#VAULT_CERTS[@]} > 0 )) || fail "No certificates found in $KEY_VAULT_NAME"
+info "Key Vault holds ${#VAULT_CERTS[@]} certificate(s)"
 
-CERT_NAME=""
-MATCHED_HOSTS=()
-for vault_cert in "${VAULT_CERTS[@]}"; do
-  mapfile -t SANS < <(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$vault_cert" \
-    --query 'policy.x509CertificateProperties.subjectAlternativeNames.dnsNames' -o tsv 2>>"$LOG_FILE" | grep -v '^$' || true)
-  for san in "${SANS[@]}"; do
-    # Translate a SAN (possibly a wildcard, e.g. *.example.com) into an anchored regex
-    san_regex="^$(printf '%s' "$san" | sed -e 's/[].[^$\\/+?(){}|]/\\&/g' -e 's/\*/[^.]+/g')$"
-    for server_name in "${SERVER_NAMES[@]}"; do
-      if printf '%s' "$server_name" | grep -Eqi "$san_regex"; then
-        CERT_NAME="$vault_cert"
-        MATCHED_HOSTS+=("$server_name")
-      fi
-    done
+declare -A CERT_BY_HOST
+UNRESOLVED=()
+
+# Key Vault names cannot contain dots, so the ACME automation stores
+# site.example.com as site-example-com - try that convention first
+for host in "${SERVER_NAMES[@]}"; do
+  candidate="${host//./-}"
+  for vault_cert in "${VAULT_CERTS[@]}"; do
+    if [[ "${vault_cert,,}" == "${candidate,,}" ]]; then
+      CERT_BY_HOST["$host"]="$vault_cert"
+      break
+    fi
   done
-  [[ -n "$CERT_NAME" ]] && break
+  [[ -n "${CERT_BY_HOST[$host]:-}" ]] || UNRESOLVED+=("$host")
 done
 
-[[ -n "$CERT_NAME" ]] || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
-mapfile -t MATCHED_HOSTS < <(printf '%s\n' "${MATCHED_HOSTS[@]}" | sort -u)
-success "Found certificate: $CERT_NAME"
-for host in "${MATCHED_HOSTS[@]}"; do info "matches $host"; done
+if (( ${#UNRESOLVED[@]} > 0 )); then
+  info "Cross-checking SANs for ${#UNRESOLVED[@]} unmatched host(s)"
+  SAN_INDEX="$TMP_DIR/sans.tsv"
+  : > "$SAN_INDEX"
+  for vault_cert in "${VAULT_CERTS[@]}"; do
+    while IFS= read -r san; do
+      [[ -n "$san" ]] && printf '%s\t%s\n' "$vault_cert" "$san" >> "$SAN_INDEX"
+    done < <(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$vault_cert" \
+      --query 'policy.x509CertificateProperties.subjectAlternativeNames.dnsNames' -o tsv 2>>"$LOG_FILE" || true)
+  done
+
+  for host in "${UNRESOLVED[@]}"; do
+    while IFS=$'\t' read -r vault_cert san; do
+      # Translate a SAN (possibly a wildcard, e.g. *.example.com) into an anchored regex
+      san_regex="^$(printf '%s' "$san" | sed -e 's/[].[^$\\/+?(){}|]/\\&/g' -e 's/\*/[^.]+/g')$"
+      if printf '%s' "$host" | grep -Eqi "$san_regex"; then
+        CERT_BY_HOST["$host"]="$vault_cert"
+        break
+      fi
+    done < "$SAN_INDEX"
+  done
+fi
+
+MATCHED_HOSTS=()
+for host in "${SERVER_NAMES[@]}"; do
+  if [[ -n "${CERT_BY_HOST[$host]:-}" ]]; then
+    MATCHED_HOSTS+=("$host")
+    info "$host -> ${CERT_BY_HOST[$host]}"
+  else
+    warn "No certificate matches $host"
+  fi
+done
+
+(( ${#MATCHED_HOSTS[@]} > 0 )) || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
+mapfile -t MATCHED_CERTS < <(for host in "${MATCHED_HOSTS[@]}"; do echo "${CERT_BY_HOST[$host]}"; done | sort -u)
+success "Matched ${#MATCHED_HOSTS[@]} host(s) to ${#MATCHED_CERTS[@]} certificate(s)"
 
 # ---- Checking certificate status --------------------------------------------
 
 step "Checking certificate status"
-TARGET_DIR="$CERT_DIR/$CERT_NAME"
-FULLCHAIN="$TARGET_DIR/fullchain.pem"
-PRIVKEY="$TARGET_DIR/privkey.pem"
+declare -A CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
+STALE_CERTS=()
 
-# Uses only the public certificate (cer) - no secret access, no local changes
-VAULT_CER_B64="$(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$CERT_NAME" --query 'cer' -o tsv 2>>"$LOG_FILE")"
-[[ -n "$VAULT_CER_B64" ]] || fail "Certificate '$CERT_NAME' returned no public certificate (cer) data"
+for cert in "${MATCHED_CERTS[@]}"; do
+  # Uses only the public certificate (cer) - no secret access, no local changes
+  vault_cer_b64="$(az keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'cer' -o tsv 2>>"$LOG_FILE")"
+  [[ -n "$vault_cer_b64" ]] || fail "Certificate '$cert' returned no public certificate (cer) data"
 
-printf '%s' "$VAULT_CER_B64" | base64 -d > "$TMP_DIR/vault.der" || fail "Could not decode certificate data"
-openssl x509 -inform DER -in "$TMP_DIR/vault.der" -out "$TMP_DIR/vault.pem" \
-  || fail "Could not parse certificate data"
+  printf '%s' "$vault_cer_b64" | base64 -d > "$TMP_DIR/$cert.der" || fail "Could not decode certificate data for $cert"
+  openssl x509 -inform DER -in "$TMP_DIR/$cert.der" -out "$TMP_DIR/$cert.vault.pem" \
+    || fail "Could not parse certificate data for $cert"
 
-VAULT_FINGERPRINT="$(openssl x509 -in "$TMP_DIR/vault.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
-VAULT_EXPIRY="$(openssl x509 -in "$TMP_DIR/vault.pem" -noout -enddate | cut -d= -f2)"
-EXPIRY_EPOCH="$(date -d "$VAULT_EXPIRY" +%s)"
-EXPIRY_DAYS=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
-info "Expires: $VAULT_EXPIRY ($EXPIRY_DAYS days remaining)"
-(( EXPIRY_DAYS >= 0 )) || warn "Vault certificate '$CERT_NAME' has already expired"
+  CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  CERT_EXPIRY["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
+  CERT_DAYS["$cert"]=$(( ($(date -d "${CERT_EXPIRY[$cert]}" +%s) - $(date +%s)) / 86400 ))
+  (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Vault certificate '$cert' has already expired"
 
-LOCAL_FINGERPRINT=""
-if [[ -f "$FULLCHAIN" ]]; then
-  LOCAL_FINGERPRINT="$(openssl x509 -in "$FULLCHAIN" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
-fi
+  local_fingerprint=""
+  if [[ -f "$CERT_DIR/$cert/fullchain.pem" ]]; then
+    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$cert/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
+  fi
 
-if [[ "$VAULT_FINGERPRINT" == "$LOCAL_FINGERPRINT" ]]; then
-  success "Certificate $CERT_NAME is already up to date, nothing to do."
-  exit 0
-fi
+  if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
+    info "$cert: up to date (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+  else
+    STALE_CERTS+=("$cert")
+    info "$cert: needs update (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days)"
+  fi
+done
+
+success "${#STALE_CERTS[@]} of ${#MATCHED_CERTS[@]} certificate(s) need updating"
 
 if (( DRY_RUN )); then
-  warn "Dry run: certificate $CERT_NAME would be downloaded and installed to $TARGET_DIR"
+  for cert in "${STALE_CERTS[@]:-}"; do
+    [[ -n "$cert" ]] && warn "Dry run: $cert would be installed to $CERT_DIR/$cert"
+  done
   exit 0
 fi
 
-# ---- Downloading certificate ------------------------------------------------
-
-step "Downloading certificate"
-# Certificates are stored as PFX-encoded secrets alongside the certificate object
-PFX_B64="$TMP_DIR/cert.b64"
-PFX_FILE="$TMP_DIR/cert.pfx"
-(umask 077; az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$CERT_NAME" --query 'value' -o tsv > "$PFX_B64" 2>>"$LOG_FILE") \
-  || fail "Failed to read secret '$CERT_NAME' from Key Vault '$KEY_VAULT_NAME'"
-[[ -s "$PFX_B64" ]] || fail "Secret '$CERT_NAME' is empty"
-base64 -d < "$PFX_B64" > "$PFX_FILE" || fail "Could not decode PFX data"
-shred -u "$PFX_B64" 2>/dev/null || rm -f "$PFX_B64"
+# ---- Downloading certificates -----------------------------------------------
 
 # OpenSSL 3 rejects the legacy RC2 encryption used by some PFX exports unless -legacy is passed
 pkcs12() { openssl pkcs12 "$@" -passin pass: 2>/dev/null || openssl pkcs12 "$@" -passin pass: -legacy; }
-pkcs12 -in "$PFX_FILE" -nokeys -clcerts -out "$TMP_DIR/cert.pem" || fail "Could not extract certificate from PFX"
-pkcs12 -in "$PFX_FILE" -nokeys -cacerts -out "$TMP_DIR/chain.pem" || true
-pkcs12 -in "$PFX_FILE" -nocerts -nodes -out "$TMP_DIR/key.pem" || fail "Could not extract private key from PFX"
-shred -u "$PFX_FILE" 2>/dev/null || rm -f "$PFX_FILE"
-
-# Strip OpenSSL's bag attribute preamble so nginx/Apache see clean PEM
+# Strips OpenSSL's bag attribute preamble so nginx/Apache see clean PEM
 strip_pem() { awk '/^-----BEGIN/,/^-----END/' "$1"; }
-strip_pem "$TMP_DIR/cert.pem" > "$TMP_DIR/fullchain.pem"
-if [[ -s "$TMP_DIR/chain.pem" ]]; then strip_pem "$TMP_DIR/chain.pem" >> "$TMP_DIR/fullchain.pem"; fi
-strip_pem "$TMP_DIR/key.pem" > "$TMP_DIR/privkey.pem"
 
-NEW_FINGERPRINT="$(openssl x509 -in "$TMP_DIR/fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
-[[ "$NEW_FINGERPRINT" == "$VAULT_FINGERPRINT" ]] \
-  || fail "Downloaded certificate fingerprint ($NEW_FINGERPRINT) does not match Key Vault ($VAULT_FINGERPRINT)"
-success "Certificate downloaded and verified"
+step "Downloading certificates"
+for cert in "${STALE_CERTS[@]:-}"; do
+  [[ -n "$cert" ]] || continue
+  # Certificates are stored as PFX-encoded secrets alongside the certificate object
+  pfx_b64="$TMP_DIR/$cert.b64"
+  pfx_file="$TMP_DIR/$cert.pfx"
+  (umask 077; az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'value' -o tsv > "$pfx_b64" 2>>"$LOG_FILE") \
+    || fail "Failed to read secret '$cert' from Key Vault '$KEY_VAULT_NAME'"
+  [[ -s "$pfx_b64" ]] || fail "Secret '$cert' is empty"
+  base64 -d < "$pfx_b64" > "$pfx_file" || fail "Could not decode PFX data for $cert"
+  shred -u "$pfx_b64" 2>/dev/null || rm -f "$pfx_b64"
 
-# ---- Installing certificate -------------------------------------------------
+  pkcs12 -in "$pfx_file" -nokeys -clcerts -out "$TMP_DIR/$cert.leaf.pem" || fail "Could not extract certificate from PFX for $cert"
+  pkcs12 -in "$pfx_file" -nokeys -cacerts -out "$TMP_DIR/$cert.chain.pem" || true
+  pkcs12 -in "$pfx_file" -nocerts -nodes -out "$TMP_DIR/$cert.rawkey.pem" || fail "Could not extract private key from PFX for $cert"
+  shred -u "$pfx_file" 2>/dev/null || rm -f "$pfx_file"
 
-step "Installing certificate"
-# The key must belong to the certificate, or the reload will fail after the config is live
-CERT_MODULUS="$(openssl x509 -in "$TMP_DIR/fullchain.pem" -noout -modulus 2>/dev/null | openssl md5)"
-KEY_MODULUS="$(openssl rsa -in "$TMP_DIR/privkey.pem" -noout -modulus 2>/dev/null | openssl md5 || true)"
-if [[ -n "$KEY_MODULUS" && "$CERT_MODULUS" != "$KEY_MODULUS" ]]; then
-  fail "Private key does not match the certificate for $CERT_NAME"
-fi
+  strip_pem "$TMP_DIR/$cert.leaf.pem" > "$TMP_DIR/$cert.fullchain.pem"
+  if [[ -s "$TMP_DIR/$cert.chain.pem" ]]; then strip_pem "$TMP_DIR/$cert.chain.pem" >> "$TMP_DIR/$cert.fullchain.pem"; fi
+  strip_pem "$TMP_DIR/$cert.rawkey.pem" > "$TMP_DIR/$cert.privkey.pem"
 
-install -d -m 0750 -o root -g root "$CERT_DIR"
-install -d -m 0750 -o root -g root "$TARGET_DIR"
+  new_fingerprint="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
+  [[ "$new_fingerprint" == "${CERT_FINGERPRINT[$cert]}" ]] \
+    || fail "Downloaded $cert fingerprint ($new_fingerprint) does not match Key Vault (${CERT_FINGERPRINT[$cert]})"
 
-# Keep the previous pair so a failed config test can be rolled back
+  # The key must belong to the certificate, or the reload will fail once the config is live
+  cert_modulus="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -modulus 2>/dev/null | openssl md5)"
+  key_modulus="$(openssl rsa -in "$TMP_DIR/$cert.privkey.pem" -noout -modulus 2>/dev/null | openssl md5 || true)"
+  if [[ -n "$key_modulus" && "$cert_modulus" != "$key_modulus" ]]; then
+    fail "Private key does not match the certificate for $cert"
+  fi
+
+  info "Downloaded and verified: $cert"
+done
+success "All certificates downloaded and verified"
+
+# ---- Installing certificates ------------------------------------------------
+
+step "Installing certificates"
 BACKUP_SUFFIX=".bak.$(date +%Y%m%d%H%M%S)"
-if [[ -f "$FULLCHAIN" ]]; then cp -p "$FULLCHAIN" "$FULLCHAIN$BACKUP_SUFFIX"; fi
-if [[ -f "$PRIVKEY" ]]; then cp -p "$PRIVKEY" "$PRIVKEY$BACKUP_SUFFIX"; fi
+install -d -m 0750 -o root -g root "$CERT_DIR"
 
-install -m 0644 -o root -g root "$TMP_DIR/fullchain.pem" "$FULLCHAIN"
-install -m 0600 -o root -g root "$TMP_DIR/privkey.pem" "$PRIVKEY"
-info "Fingerprint: $VAULT_FINGERPRINT"
-success "Certificate installed to $TARGET_DIR"
+for cert in "${STALE_CERTS[@]:-}"; do
+  [[ -n "$cert" ]] || continue
+  target_dir="$CERT_DIR/$cert"
+  install -d -m 0750 -o root -g root "$target_dir"
+
+  # Keep the previous pair so a failed config test can be rolled back
+  if [[ -f "$target_dir/fullchain.pem" ]]; then cp -p "$target_dir/fullchain.pem" "$target_dir/fullchain.pem$BACKUP_SUFFIX"; fi
+  if [[ -f "$target_dir/privkey.pem" ]]; then cp -p "$target_dir/privkey.pem" "$target_dir/privkey.pem$BACKUP_SUFFIX"; fi
+
+  install -m 0644 -o root -g root "$TMP_DIR/$cert.fullchain.pem" "$target_dir/fullchain.pem"
+  install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
+  info "$cert -> $target_dir (${CERT_FINGERPRINT[$cert]})"
+done
+success "Installed ${#STALE_CERTS[@]} certificate(s)"
 
 # ---- Validating site configuration ------------------------------------------
 
 step "Validating site configuration"
-mapfile -t TARGET_FILES < <(
-  for host in "${MATCHED_HOSTS[@]}"; do
-    awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP"
-  done | sort -u
-)
+# A config file can only carry one certificate pair, so map each file to a single cert
+declare -A FILE_CERT
+for host in "${MATCHED_HOSTS[@]}"; do
+  cert="${CERT_BY_HOST[$host]}"
+  while IFS= read -r conf; do
+    [[ -n "$conf" ]] || continue
+    existing="${FILE_CERT[$conf]:-}"
+    if [[ -z "$existing" ]]; then
+      FILE_CERT["$conf"]="$cert"
+    elif [[ "$existing" != "$cert" ]]; then
+      warn "$conf serves hosts needing different certificates ($existing, $cert) - keeping $existing"
+    fi
+  done < <(awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP")
+done
+
+TARGET_FILES=()
+if (( ${#FILE_CERT[@]} > 0 )); then TARGET_FILES=("${!FILE_CERT[@]}"); fi
 
 # Rewrites are staged in the temp dir first so nothing is touched until every file validates
 STAGE_DIR="$TMP_DIR/stage"
@@ -374,41 +433,54 @@ for conf in "${TARGET_FILES[@]}"; do
     continue
   fi
 
+  cert="${FILE_CERT[$conf]}"
+  fullchain="$CERT_DIR/$cert/fullchain.pem"
+  privkey="$CERT_DIR/$cert/privkey.pem"
   staged="$STAGE_DIR/$((STAGE_INDEX++)).conf"
+
   if [[ "$WEB_SERVER" == "nginx" ]]; then
     sed -E \
-      -e "s#^([[:space:]]*)ssl_certificate[[:space:]]+[^;]+;#\1ssl_certificate $FULLCHAIN;#" \
-      -e "s#^([[:space:]]*)ssl_certificate_key[[:space:]]+[^;]+;#\1ssl_certificate_key $PRIVKEY;#" \
+      -e "s#^([[:space:]]*)ssl_certificate[[:space:]]+[^;]+;#\1ssl_certificate $fullchain;#" \
+      -e "s#^([[:space:]]*)ssl_certificate_key[[:space:]]+[^;]+;#\1ssl_certificate_key $privkey;#" \
       "$conf" > "$staged"
   else
     sed -E \
-      -e "s#^([[:space:]]*)SSLCertificateFile[[:space:]]+.*#\1SSLCertificateFile $FULLCHAIN#I" \
-      -e "s#^([[:space:]]*)SSLCertificateKeyFile[[:space:]]+.*#\1SSLCertificateKeyFile $PRIVKEY#I" \
+      -e "s#^([[:space:]]*)SSLCertificateFile[[:space:]]+.*#\1SSLCertificateFile $fullchain#I" \
+      -e "s#^([[:space:]]*)SSLCertificateKeyFile[[:space:]]+.*#\1SSLCertificateKeyFile $privkey#I" \
       -e "/^[[:space:]]*SSLCertificateChainFile[[:space:]]/Id" \
       "$conf" > "$staged"
   fi
 
   if cmp -s "$conf" "$staged"; then
-    info "Already current: $conf"
+    info "Already current: $conf ($cert)"
   else
     STAGED["$conf"]="$staged"
     PENDING_FILES+=("$conf")
-    info "Pending update: $conf"
+    info "Pending update: $conf ($cert)"
   fi
 done
 
 success "Validated ${#TARGET_FILES[@]} config file(s), ${#PENDING_FILES[@]} to update"
 
+if (( ${#STALE_CERTS[@]} == 0 && ${#PENDING_FILES[@]} == 0 )); then
+  step "Done"
+  success "All certificates and site configuration are already up to date, nothing to do."
+  exit 0
+fi
+
 # ---- Applying site configuration --------------------------------------------
 
 step "Applying site configuration"
 rollback() {
-  warn "Rolling back configuration and certificate"
+  warn "Rolling back configuration and certificates"
   for conf in "${TARGET_FILES[@]}"; do
     if [[ -f "$conf$BACKUP_SUFFIX" ]]; then mv -f "$conf$BACKUP_SUFFIX" "$conf"; fi
   done
-  if [[ -f "$FULLCHAIN$BACKUP_SUFFIX" ]]; then mv -f "$FULLCHAIN$BACKUP_SUFFIX" "$FULLCHAIN"; fi
-  if [[ -f "$PRIVKEY$BACKUP_SUFFIX" ]]; then mv -f "$PRIVKEY$BACKUP_SUFFIX" "$PRIVKEY"; fi
+  for cert in "${STALE_CERTS[@]:-}"; do
+    [[ -n "$cert" ]] || continue
+    if [[ -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/fullchain.pem"; fi
+    if [[ -f "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/privkey.pem"; fi
+  done
 }
 
 for conf in "${PENDING_FILES[@]:-}"; do
@@ -443,18 +515,20 @@ else
 fi
 success "$WEB_SERVER reloaded"
 
-# Remove superseded backups only after the new certificate is confirmed live
-rm -f "$FULLCHAIN$BACKUP_SUFFIX" "$PRIVKEY$BACKUP_SUFFIX"
+# Remove superseded backups only after the new certificates are confirmed live
+for cert in "${STALE_CERTS[@]:-}"; do
+  [[ -n "$cert" ]] && rm -f "$CERT_DIR/$cert/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$cert/privkey.pem$BACKUP_SUFFIX"
+done
 for conf in "${TARGET_FILES[@]}"; do rm -f "$conf$BACKUP_SUFFIX"; done
 
 # ---- Summary ----------------------------------------------------------------
 
 step "Done"
-info "Key Vault:   $KEY_VAULT_NAME"
-info "Certificate: $CERT_NAME"
-info "Hosts:       ${MATCHED_HOSTS[*]}"
-info "Expires:     $VAULT_EXPIRY ($EXPIRY_DAYS days remaining)"
-info "Fingerprint: $VAULT_FINGERPRINT"
-info "Installed:   $TARGET_DIR"
-info "Log:         $LOG_FILE"
-success "Certificate $CERT_NAME installed and $WEB_SERVER reloaded"
+info "Key Vault:  $KEY_VAULT_NAME"
+info "Web server: $WEB_SERVER"
+for host in "${MATCHED_HOSTS[@]}"; do
+  cert="${CERT_BY_HOST[$host]}"
+  info "$host -> $cert (expires ${CERT_EXPIRY[$cert]}, ${CERT_DAYS[$cert]} days) $CERT_DIR/$cert"
+done
+info "Log:        $LOG_FILE"
+success "Updated ${#STALE_CERTS[@]} certificate(s) across ${#TARGET_FILES[@]} site config(s), $WEB_SERVER reloaded"
