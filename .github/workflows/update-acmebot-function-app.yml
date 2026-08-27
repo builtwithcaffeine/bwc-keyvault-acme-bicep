@@ -6,25 +6,25 @@ on:
   workflow_dispatch:
     inputs:
       subscriptionId:
-        description: 'Azure Subscription Id:'
+        description: "Azure Subscription Id:"
         required: true
         type: string
 
       resourceGroupName:
-        description: 'Resource Group Name:'
+        description: "Resource Group Name:"
         required: true
         type: string
 
       functionAppName:
-        description: 'Function App Name:'
+        description: "Function App Name:"
         required: true
         type: string
 
       version:
-        description: 'Acmebot version:'
+        description: "Acmebot version:"
         required: false
         type: string
-        default: ''
+        default: ""
 
 permissions:
   id-token: write
