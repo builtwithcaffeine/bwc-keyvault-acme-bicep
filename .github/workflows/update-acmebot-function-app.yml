@@ -1,5 +1,7 @@
 name: Update Acmebot Function App
 
+run-name: Update ${{ inputs.functionAppName }} to ${{ inputs.version || 'latest' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,16 +9,19 @@ on:
         description: 'Azure Subscription Id:'
         required: true
         type: string
+
       resourceGroupName:
         description: 'Resource Group Name:'
         required: true
         type: string
+
       functionAppName:
         description: 'Function App Name:'
         required: true
         type: string
+
       version:
-        description: "Acmebot version to deploy (e.g. 5.0.0)."
+        description: 'Acmebot version:'
         required: false
         type: string
         default: ''
@@ -25,119 +30,183 @@ permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: acmebot-update-${{ inputs.subscriptionId }}-${{ inputs.resourceGroupName }}-${{ inputs.functionAppName }}
+  cancel-in-progress: false
+
 env:
-  PARAM_FILE: infra/create/param.main.bicepparam
   UPDATE_TEMPLATE: infra/update/main.bicep
   ACMEBOT_REPO: polymind-inc/acmebot
 
 jobs:
   update-function-app:
+    name: Update Acmebot
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Resolve target version
+      - name: Resolve and validate Acmebot version
         id: version
-        run: |
-          set -euo pipefail
-          if [ -z "${{ inputs.version }}" ]; then
-            resolved=$(grep -oP "(?<=^param acmebotReleaseTag = ')[^']+" "$PARAM_FILE")
-            if [[ -z "$resolved" ]]; then
-              echo "::error::Could not resolve acmebotReleaseTag from ${PARAM_FILE}"
-              exit 1
-            fi
-            echo "Resolved empty input to pinned version: ${resolved}"
-          else
-            resolved="${{ inputs.version }}"
-            echo "Using explicitly provided version: ${resolved}"
-          fi
-          echo "version=${resolved}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate requested Acmebot version
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ "$VERSION" == "latest" ]]; then
-            echo "Version 'latest' requires no further validation."
-            exit 0
-          fi
 
-          if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::'${VERSION}' is not a valid Acmebot version. Expected 'latest' or a semver value such as '5.0.0' or 'v5.0.0'."
+          requestedVersion="${REQUESTED_VERSION:-latest}"
+
+          if [[ "${requestedVersion,,}" == "latest" ]]; then
+            releaseEndpoint="repos/${ACMEBOT_REPO}/releases/latest"
+          elif [[ "$requestedVersion" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            releaseTag="$requestedVersion"
+
+            if [[ "$releaseTag" != v* ]]; then
+              releaseTag="v${releaseTag}"
+            fi
+
+            releaseEndpoint="repos/${ACMEBOT_REPO}/releases/tags/${releaseTag}"
+          else
+            echo "::error::'${requestedVersion}' is not valid."
+            echo "::error::Specify 'latest' or a version such as '5.0.0' or 'v5.0.0'."
             exit 1
           fi
 
-          tag="$VERSION"
-          if [[ "$tag" != v* ]]; then
-            tag="v${tag}"
-          fi
-
-          if ! gh api "repos/${ACMEBOT_REPO}/releases/tags/${tag}" --jq '.tag_name' >/dev/null 2>&1; then
-            echo "::error::Release '${tag}' was not found in ${ACMEBOT_REPO}. Check https://github.com/${ACMEBOT_REPO}/releases for valid versions."
+          if ! releaseJson=$(gh api "$releaseEndpoint" 2>/dev/null); then
+            echo "::error::The requested Acmebot release could not be found."
+            echo "::error::Check https://github.com/${ACMEBOT_REPO}/releases for available versions."
             exit 1
           fi
 
-          echo "Confirmed release '${tag}' exists in ${ACMEBOT_REPO}."
+          resolvedTag=$(jq -r '.tag_name' <<< "$releaseJson")
+          targetVersion="${resolvedTag#v}"
 
-      - name: Azure Login (OIDC federated)
+          if [[ ! "$targetVersion" =~ ^5\. ]]; then
+            echo "::error::Release '${resolvedTag}' is not an Acmebot v5 release."
+            echo "::error::Acmebot v4 deployments must use the v4-to-v5 migration process."
+            exit 1
+          fi
+
+          if ! jq -e '.assets[]? | select(.name == "acmebot.zip")' \
+            <<< "$releaseJson" >/dev/null; then
+            echo "::error::Release '${resolvedTag}' does not contain the required acmebot.zip asset."
+            exit 1
+          fi
+
+          echo "Resolved '${requestedVersion}' to '${resolvedTag}'."
+
+          {
+            echo "requested=${requestedVersion}"
+            echo "tag=${resolvedTag}"
+            echo "target_version=${targetVersion}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Azure login
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ inputs.subscriptionId }}
 
-      - name: Check Function App status & resolve resource group
+      - name: Check Function App
         id: preflight
+        shell: bash
+        env:
+          SUBSCRIPTION_ID: ${{ inputs.subscriptionId }}
+          RESOURCE_GROUP: ${{ inputs.resourceGroupName }}
+          FUNCTION_APP_NAME: ${{ inputs.functionAppName }}
         run: |
           set -euo pipefail
-          resourceGroup="${{ inputs.resourceGroupName }}"
 
-          state=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "state" --output tsv)
-          hostName=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "$resourceGroup" --name "${{ inputs.functionAppName }}" --query "defaultHostName" --output tsv)
+          functionApp=$(az functionapp show \
+            --subscription "$SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_APP_NAME" \
+            --output json)
 
-          echo "Function App '${{ inputs.functionAppName }}' found in resource group '${resourceGroup}' (state: ${state})"
+          resourceId=$(jq -r '.id' <<< "$functionApp")
+          resourceKind=$(jq -r '.kind // "Not reported"' <<< "$functionApp")
 
-          echo "resourceGroup=${resourceGroup}" >> "$GITHUB_OUTPUT"
-          echo "preDeployState=${state}" >> "$GITHUB_OUTPUT"
-          echo "hostName=${hostName}" >> "$GITHUB_OUTPUT"
+          if [[ -z "$resourceId" || "$resourceId" == "null" ]]; then
+            echo "::error::Function App '${FUNCTION_APP_NAME}' could not be found."
+            exit 1
+          fi
+
+          workerRuntime=$(az functionapp config appsettings list \
+            --subscription "$SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTION_APP_NAME" \
+            --query "[?name=='FUNCTIONS_WORKER_RUNTIME'].value | [0]" \
+            --output tsv 2>/dev/null || true)
+
+          if [[ "$workerRuntime" == "dotnet" ]]; then
+            echo "::error::This appears to be an Acmebot v4 Function App."
+            echo "::error::Migrate it to Acmebot v5 before using this update workflow."
+            exit 1
+          fi
+
+          if [[ -z "$workerRuntime" ]]; then
+            workerRuntime="Not reported"
+            echo "::warning::The Function App worker runtime was not reported."
+          fi
+
+          echo "Function App '${FUNCTION_APP_NAME}' found in '${RESOURCE_GROUP}'."
+          echo "Resource kind: ${resourceKind}"
+          echo "Worker runtime: ${workerRuntime}"
+
+          {
+            echo "resource_group=${RESOURCE_GROUP}"
+            echo "resource_id=${resourceId}"
+            echo "resource_kind=${resourceKind}"
+            echo "worker_runtime=${workerRuntime}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Run update deployment
         id: deploy
+        shell: bash
+        env:
+          SUBSCRIPTION_ID: ${{ inputs.subscriptionId }}
+          RESOURCE_GROUP: ${{ steps.preflight.outputs.resource_group }}
+          FUNCTION_APP_NAME: ${{ inputs.functionAppName }}
+          TARGET_VERSION: ${{ steps.version.outputs.target_version }}
         run: |
           set -euo pipefail
-          az deployment group create \
-            --subscription "${{ inputs.subscriptionId }}" \
-            --resource-group "${{ steps.preflight.outputs.resourceGroup }}" \
-            --template-file "$UPDATE_TEMPLATE" \
-            --parameters functionAppName="${{ inputs.functionAppName }}" acmebotReleaseTag="${{ steps.version.outputs.version }}" \
-            --name "acmebot-update-${{ steps.version.outputs.version }}-${{ github.run_id }}"
 
-      - name: Wait for Function App to come back online
-        id: wait
-        run: |
-          set -euo pipefail
-          for attempt in $(seq 1 30); do
-            state=$(az functionapp show --subscription "${{ inputs.subscriptionId }}" --resource-group "${{ steps.preflight.outputs.resourceGroup }}" --name "${{ inputs.functionAppName }}" --query "state" --output tsv)
-            echo "Attempt ${attempt}/30: Function App state = ${state}"
-            if [ "$state" = "Running" ]; then
-              echo "postDeployState=${state}" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ -z "$state" ]; then
-              echo "Function App state is not reported by the Flex Consumption API; continuing to smoke test."
-              echo "postDeployState=Not reported (Flex Consumption)" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::Function App did not reach 'Running' state within the timeout window."
-          exit 1
+          deploymentVersion="${TARGET_VERSION//./-}"
+          deploymentName="acmebot-update-${deploymentVersion}-${GITHUB_RUN_ID}"
+
+          deploymentResult=$(az deployment group create \
+            --subscription "$SUBSCRIPTION_ID" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file "$UPDATE_TEMPLATE" \
+            --parameters \
+              functionAppName="$FUNCTION_APP_NAME" \
+              targetVersion="$TARGET_VERSION" \
+            --name "$deploymentName" \
+            --output json)
+
+          provisioningState=$(jq -r '.properties.provisioningState' <<< "$deploymentResult")
+          packageUri=$(jq -r '.properties.outputs.appPackageUri.value // empty' <<< "$deploymentResult")
+
+          if [[ "$provisioningState" != "Succeeded" ]]; then
+            echo "::error::Deployment completed with state '${provisioningState}'."
+            exit 1
+          fi
+
+          echo "Acmebot '${TARGET_VERSION}' package deployment succeeded."
+
+          {
+            echo "deployment_name=${deploymentName}"
+            echo "provisioning_state=${provisioningState}"
+            echo "package_uri=${packageUri}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Report
         if: always()
+        shell: bash
         run: |
           {
             echo "## Acmebot Function App Update"
@@ -146,10 +215,13 @@ jobs:
             echo "|---|---|"
             echo "| Function App | ${{ inputs.functionAppName }} |"
             echo "| Subscription | ${{ inputs.subscriptionId }} |"
-            echo "| Resource Group | ${{ steps.preflight.outputs.resourceGroup }} |"
-            echo "| Requested Version | ${{ inputs.version }} |"
-            echo "| Deployed Version | ${{ steps.version.outputs.version }} |"
-            echo "| State Before | ${{ steps.preflight.outputs.preDeployState }} |"
-            echo "| State After | ${{ steps.wait.outputs.postDeployState }} |"
-            echo "| Deployment Job | ${{ job.status }} |"
+            echo "| Resource Group | ${{ steps.preflight.outputs.resource_group }} |"
+            echo "| Resource Kind | ${{ steps.preflight.outputs.resource_kind }} |"
+            echo "| Worker Runtime | ${{ steps.preflight.outputs.worker_runtime }} |"
+            echo "| Requested Version | ${{ steps.version.outputs.requested }} |"
+            echo "| Resolved Version | ${{ steps.version.outputs.tag }} |"
+            echo "| Deployment | ${{ steps.deploy.outputs.deployment_name }} |"
+            echo "| ARM Deployment State | ${{ steps.deploy.outputs.provisioning_state }} |"
+            echo "| Runtime Health Check | Not performed — Flex Consumption/private networking |"
+            echo "| Workflow Result | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
