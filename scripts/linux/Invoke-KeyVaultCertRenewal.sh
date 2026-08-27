@@ -102,6 +102,23 @@ command -v az >/dev/null 2>&1 || fail "Azure CLI installation could not be verif
 command -v openssl >/dev/null 2>&1 || fail "openssl is required but not installed."
 success "Azure CLI available"
 
+# ---- Authenticating to Azure ------------------------------------------------
+
+step "Authenticating to Azure"
+if ! az account show >/dev/null 2>&1; then
+  info "Logging in using managed identity..."
+  if [[ -n "$AZURE_CLIENT_ID" ]]; then
+    az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+      || fail "az login --identity --client-id $AZURE_CLIENT_ID failed, see $LOG_FILE"
+    info "Using user-assigned identity: $AZURE_CLIENT_ID"
+  else
+    az login --identity >/dev/null 2>>"$LOG_FILE" \
+      || fail "az login --identity failed, see $LOG_FILE"
+    info "Using system-assigned identity"
+  fi
+fi
+success "Authenticated to Azure"
+
 # ---- Detecting web server ---------------------------------------------------
 
 step "Detecting web server"
@@ -127,33 +144,70 @@ step "Collecting server names"
 VHOST_MAP="$TMP_DIR/vhosts.tsv"
 : > "$VHOST_MAP"
 
-if [[ "$WEB_SERVER" == "nginx" ]]; then
-  # nginx -T dumps the fully resolved config, annotated with "# configuration file <path>:"
-  nginx -T > "$TMP_DIR/nginx-dump.txt" 2>>"$LOG_FILE" || fail "nginx -T failed, config may be invalid"
-  awk '
-    /^# configuration file / { file = $4; sub(/:$/, "", file); next }
-    /^[[:space:]]*server_name[[:space:]]/ {
+# Extracts "server_name a b c;" / "ServerName a" / "ServerAlias a b" from a config file
+parse_server_names() {
+  local file="$1" dump="$2"
+  awk -v conf="$file" '
+    /^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]/ {
       line = $0
-      sub(/;.*$/, "", line)
-      sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+      sub(/#.*$/, "", line); sub(/;.*$/, "", line)
+      sub(/^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]+/, "", line)
       n = split(line, names, /[[:space:]]+/)
       for (i = 1; i <= n; i++) {
-        if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" file
+        if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" conf
       }
     }
-  ' "$TMP_DIR/nginx-dump.txt" | sort -u > "$VHOST_MAP"
+  ' "$dump"
+}
+
+if [[ "$WEB_SERVER" == "nginx" ]]; then
+  # nginx -T dumps the fully resolved config, annotated with "# configuration file <path>:"
+  if nginx -T > "$TMP_DIR/nginx-dump.txt" 2>"$TMP_DIR/nginx-err.txt"; then
+    awk '
+      /^# configuration file / { file = $4; sub(/:$/, "", file); next }
+      /^[[:space:]]*server_name[[:space:]]/ {
+        line = $0
+        sub(/#.*$/, "", line); sub(/;.*$/, "", line)
+        sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+        n = split(line, names, /[[:space:]]+/)
+        for (i = 1; i <= n; i++) {
+          if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" file
+        }
+      }
+    ' "$TMP_DIR/nginx-dump.txt" | sort -u > "$VHOST_MAP"
+  else
+    # A config test failure is expected on first run, when the vhost still points at a
+    # certificate path this script has not created yet - fall back to scanning the tree
+    cat "$TMP_DIR/nginx-err.txt" >> "$LOG_FILE"
+    warn "nginx -T failed: $(head -n 3 "$TMP_DIR/nginx-err.txt" | tr '\n' ' ')"
+    warn "Falling back to scanning /etc/nginx for server names"
+    while IFS= read -r conf; do
+      parse_server_names "$conf" "$conf"
+    done < <(grep -rlE '^[[:space:]]*server_name[[:space:]]' /etc/nginx 2>/dev/null || true) \
+      | sort -u > "$VHOST_MAP"
+  fi
 else
   # apachectl -S lists: "port 443 namevhost example.com (/etc/apache2/sites-enabled/x.conf:12)"
-  "$APACHE_BIN" -S > "$TMP_DIR/apache-dump.txt" 2>&1 || fail "$APACHE_BIN -S failed, config may be invalid"
-  awk '
-    /port 443 namevhost/ {
-      host = $4
-      file = $5
-      gsub(/[()]/, "", file)
-      sub(/:[0-9]+$/, "", file)
-      if (host != "" && file != "") print host "\t" file
-    }
-  ' "$TMP_DIR/apache-dump.txt" | sort -u > "$VHOST_MAP"
+  if "$APACHE_BIN" -S > "$TMP_DIR/apache-dump.txt" 2>&1; then
+    awk '
+      /port 443 namevhost/ {
+        host = $4
+        file = $5
+        gsub(/[()]/, "", file)
+        sub(/:[0-9]+$/, "", file)
+        if (host != "" && file != "") print host "\t" file
+      }
+    ' "$TMP_DIR/apache-dump.txt" | sort -u > "$VHOST_MAP"
+  else
+    cat "$TMP_DIR/apache-dump.txt" >> "$LOG_FILE"
+    warn "$APACHE_BIN -S failed: $(head -n 3 "$TMP_DIR/apache-dump.txt" | tr '\n' ' ')"
+    warn "Falling back to scanning Apache config for server names"
+    APACHE_ROOT=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
+    while IFS= read -r conf; do
+      parse_server_names "$conf" "$conf"
+    done < <(grep -rlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
+      | sort -u > "$VHOST_MAP"
+  fi
 fi
 
 if [[ ! -s "$VHOST_MAP" ]]; then
@@ -163,21 +217,6 @@ fi
 mapfile -t SERVER_NAMES < <(cut -f1 "$VHOST_MAP" | sort -u)
 success "Found ${#SERVER_NAMES[@]} server name(s)"
 for name in "${SERVER_NAMES[@]}"; do info "- $name"; done
-
-# ---- Authenticating to Azure ------------------------------------------------
-
-step "Authenticating to Azure"
-if ! az account show >/dev/null 2>&1; then
-  info "Logging in using managed identity..."
-  if [[ -n "$AZURE_CLIENT_ID" ]]; then
-    az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
-      || fail "az login --identity --client-id $AZURE_CLIENT_ID failed, see $LOG_FILE"
-  else
-    az login --identity >/dev/null 2>>"$LOG_FILE" \
-      || fail "az login --identity failed, see $LOG_FILE"
-  fi
-fi
-success "Authenticated to Azure"
 
 # ---- Locating Key Vault -----------------------------------------------------
 
@@ -291,6 +330,13 @@ success "Certificate downloaded and verified"
 # ---- Installing certificate -------------------------------------------------
 
 step "Installing certificate"
+# The key must belong to the certificate, or the reload will fail after the config is live
+CERT_MODULUS="$(openssl x509 -in "$TMP_DIR/fullchain.pem" -noout -modulus 2>/dev/null | openssl md5)"
+KEY_MODULUS="$(openssl rsa -in "$TMP_DIR/privkey.pem" -noout -modulus 2>/dev/null | openssl md5 || true)"
+if [[ -n "$KEY_MODULUS" && "$CERT_MODULUS" != "$KEY_MODULUS" ]]; then
+  fail "Private key does not match the certificate for $CERT_NAME"
+fi
+
 install -d -m 0750 -o root -g root "$CERT_DIR"
 install -d -m 0750 -o root -g root "$TARGET_DIR"
 
@@ -304,46 +350,58 @@ install -m 0600 -o root -g root "$TMP_DIR/privkey.pem" "$PRIVKEY"
 info "Fingerprint: $VAULT_FINGERPRINT"
 success "Certificate installed to $TARGET_DIR"
 
-# ---- Updating site configuration --------------------------------------------
+# ---- Validating site configuration ------------------------------------------
 
-step "Updating site configuration"
+step "Validating site configuration"
 mapfile -t TARGET_FILES < <(
   for host in "${MATCHED_HOSTS[@]}"; do
     awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP"
   done | sort -u
 )
 
-CONFIG_CHANGED=0
-for conf in "${TARGET_FILES[@]}"; do
-  [[ -f "$conf" ]] || { warn "Config file not found: $conf"; continue; }
-  cp -p "$conf" "$conf$BACKUP_SUFFIX"
+# Rewrites are staged in the temp dir first so nothing is touched until every file validates
+STAGE_DIR="$TMP_DIR/stage"
+mkdir -p "$STAGE_DIR"
+declare -A STAGED
+PENDING_FILES=()
+STAGE_INDEX=0
 
-  if [[ "$WEB_SERVER" == "nginx" ]]; then
-    sed -i -E \
-      -e "s#^([[:space:]]*)ssl_certificate[[:space:]]+[^;]+;#\1ssl_certificate $FULLCHAIN;#" \
-      -e "s#^([[:space:]]*)ssl_certificate_key[[:space:]]+[^;]+;#\1ssl_certificate_key $PRIVKEY;#" \
-      "$conf"
-  else
-    sed -i -E \
-      -e "s#^([[:space:]]*)SSLCertificateFile[[:space:]]+.*#\1SSLCertificateFile $FULLCHAIN#I" \
-      -e "s#^([[:space:]]*)SSLCertificateKeyFile[[:space:]]+.*#\1SSLCertificateKeyFile $PRIVKEY#I" \
-      "$conf"
-    # A bundled fullchain makes a separate chain file redundant and Apache 2.4.8+ rejects it
-    sed -i -E "s#^([[:space:]]*)SSLCertificateChainFile[[:space:]]+.*#\1#I" "$conf"
+for conf in "${TARGET_FILES[@]}"; do
+  if [[ ! -f "$conf" ]]; then warn "Config file not found: $conf"; continue; fi
+
+  if ! grep -qiE '^[[:space:]]*(ssl_certificate|SSLCertificateFile)[[:space:]]' "$conf"; then
+    warn "No certificate directive in $conf - add ssl_certificate/SSLCertificateFile manually"
+    continue
   fi
 
-  if cmp -s "$conf" "$conf$BACKUP_SUFFIX"; then
-    rm -f "$conf$BACKUP_SUFFIX"
-    info "No change needed: $conf"
+  staged="$STAGE_DIR/$((STAGE_INDEX++)).conf"
+  if [[ "$WEB_SERVER" == "nginx" ]]; then
+    sed -E \
+      -e "s#^([[:space:]]*)ssl_certificate[[:space:]]+[^;]+;#\1ssl_certificate $FULLCHAIN;#" \
+      -e "s#^([[:space:]]*)ssl_certificate_key[[:space:]]+[^;]+;#\1ssl_certificate_key $PRIVKEY;#" \
+      "$conf" > "$staged"
   else
-    CONFIG_CHANGED=1
-    info "Updated: $conf"
+    sed -E \
+      -e "s#^([[:space:]]*)SSLCertificateFile[[:space:]]+.*#\1SSLCertificateFile $FULLCHAIN#I" \
+      -e "s#^([[:space:]]*)SSLCertificateKeyFile[[:space:]]+.*#\1SSLCertificateKeyFile $PRIVKEY#I" \
+      -e "/^[[:space:]]*SSLCertificateChainFile[[:space:]]/Id" \
+      "$conf" > "$staged"
+  fi
+
+  if cmp -s "$conf" "$staged"; then
+    info "Already current: $conf"
+  else
+    STAGED["$conf"]="$staged"
+    PENDING_FILES+=("$conf")
+    info "Pending update: $conf"
   fi
 done
 
-# ---- Validating and reloading -----------------------------------------------
+success "Validated ${#TARGET_FILES[@]} config file(s), ${#PENDING_FILES[@]} to update"
 
-step "Validating and reloading $WEB_SERVER"
+# ---- Applying site configuration --------------------------------------------
+
+step "Applying site configuration"
 rollback() {
   warn "Rolling back configuration and certificate"
   for conf in "${TARGET_FILES[@]}"; do
@@ -353,12 +411,32 @@ rollback() {
   if [[ -f "$PRIVKEY$BACKUP_SUFFIX" ]]; then mv -f "$PRIVKEY$BACKUP_SUFFIX" "$PRIVKEY"; fi
 }
 
+for conf in "${PENDING_FILES[@]:-}"; do
+  [[ -n "$conf" ]] || continue
+  cp -p "$conf" "$conf$BACKUP_SUFFIX"
+  cat "${STAGED[$conf]}" > "$conf"
+  info "Applied: $conf"
+done
+
+if (( ${#PENDING_FILES[@]} == 0 )); then
+  info "No config changes required, certificate files replaced in place"
+fi
+
+# The config test runs against the live tree, so it can only happen once changes are applied
 if [[ "$WEB_SERVER" == "nginx" ]]; then
   nginx -t >>"$LOG_FILE" 2>&1 || { rollback; fail "nginx config test failed, see $LOG_FILE"; }
+else
+  "$APACHE_BIN" -t >>"$LOG_FILE" 2>&1 || { rollback; fail "Apache config test failed, see $LOG_FILE"; }
+fi
+success "Configuration applied and config test passed"
+
+# ---- Reloading web server ---------------------------------------------------
+
+step "Reloading $WEB_SERVER"
+if [[ "$WEB_SERVER" == "nginx" ]]; then
   systemctl reload nginx >>"$LOG_FILE" 2>&1 || nginx -s reload >>"$LOG_FILE" 2>&1 \
     || { rollback; fail "nginx reload failed, see $LOG_FILE"; }
 else
-  "$APACHE_BIN" -t >>"$LOG_FILE" 2>&1 || { rollback; fail "Apache config test failed, see $LOG_FILE"; }
   APACHE_SERVICE=$(systemctl list-units --type=service --all --no-legend 'apache2.service' 'httpd.service' 2>/dev/null | awk '{print $1}' | head -n1)
   systemctl reload "${APACHE_SERVICE:-apache2}" >>"$LOG_FILE" 2>&1 \
     || { rollback; fail "Apache reload failed, see $LOG_FILE"; }
@@ -369,9 +447,14 @@ success "$WEB_SERVER reloaded"
 rm -f "$FULLCHAIN$BACKUP_SUFFIX" "$PRIVKEY$BACKUP_SUFFIX"
 for conf in "${TARGET_FILES[@]}"; do rm -f "$conf$BACKUP_SUFFIX"; done
 
+# ---- Summary ----------------------------------------------------------------
+
 step "Done"
-if (( CONFIG_CHANGED )); then
-  success "Certificate $CERT_NAME installed, site config updated and $WEB_SERVER reloaded"
-else
-  success "Certificate $CERT_NAME renewed in place and $WEB_SERVER reloaded"
-fi
+info "Key Vault:   $KEY_VAULT_NAME"
+info "Certificate: $CERT_NAME"
+info "Hosts:       ${MATCHED_HOSTS[*]}"
+info "Expires:     $VAULT_EXPIRY ($EXPIRY_DAYS days remaining)"
+info "Fingerprint: $VAULT_FINGERPRINT"
+info "Installed:   $TARGET_DIR"
+info "Log:         $LOG_FILE"
+success "Certificate $CERT_NAME installed and $WEB_SERVER reloaded"
