@@ -1,0 +1,40 @@
+[Unit]
+Description=Renew TLS certificates from Azure Key Vault
+Documentation=https://github.com/builtwithcaffeine/bwc-keyvault-acme-bicep
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/Invoke-KeyVaultCertRenewal.sh
+
+# Set when the VM has more than one managed identity attached
+# Environment=AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000
+# Environment=KEY_VAULT_NAME=kv-example
+
+# Keeps the Azure CLI token cache out of /root so ProtectHome can stay enabled
+RuntimeDirectory=keyvault-cert-renewal
+RuntimeDirectoryMode=0700
+Environment=AZURE_CONFIG_DIR=/run/keyvault-cert-renewal/azure
+
+# Root is required to write /etc/ssl and reload the web server, so limit the rest.
+# ProtectSystem is deliberately unset: the script installs the Azure CLI into /usr
+# on first run when it is missing.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+UMask=0077
+
+# Long enough for a slow vault plus a package install, short enough that a hung
+# run is killed rather than overlapping the next day's timer
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily Azure Key Vault TLS certificate renewal
+Documentation=https://github.com/builtwithcaffeine/bwc-keyvault-acme-bicep
+
+[Timer]
+OnCalendar=daily
+# Spreads load across the fleet so every VM does not hit Key Vault at 00:00
+RandomizedDelaySec=4h
+# Runs on boot if the machine was off when the timer was due
+Persistent=true
+Unit=keyvault-cert-renewal.service
+
+[Install]
+WantedBy=timers.target

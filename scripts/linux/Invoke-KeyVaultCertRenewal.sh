@@ -58,19 +58,21 @@ else
 fi
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
+# Warnings and failures go to stderr so systemd records them at the right priority
 emit() {
-  local tag="$1" colour="$2" text="$3" now
+  local tag="$1" colour="$2" text="$3" to_stderr="${4:-}" now line
   now="$(ts)"
   printf '%s %-3s %s\n' "$now" "$tag" "$text" >> "$LOG_FILE"
-  printf '%s %b%-3s%b %s\n' "$now" "$colour" "$tag" "$C_RESET" "$text"
+  line="$(printf '%s %b%-3s%b %s' "$now" "$colour" "$tag" "$C_RESET" "$text")"
+  if [[ -n "$to_stderr" ]]; then printf '%s\n' "$line" >&2; else printf '%s\n' "$line"; fi
 }
 
 step()    { echo; emit '==>' "$C_CYAN" "$*"; }
 info()    { emit ''  ''          "$*"; }
 detail()  { emit ''  ''          "  $*"; }
 success() { emit 'OK' "$C_GREEN"  "$*"; }
-warn()    { emit '!!' "$C_YELLOW" "$*"; }
-fail()    { emit 'XX' "$C_RED"    "$*"; exit 1; }
+warn()    { emit '!!' "$C_YELLOW" "$*" err; }
+fail()    { emit 'XX' "$C_RED"    "$*" err; exit 1; }
 
 # Prevent overlapping runs (e.g. a slow run still executing when the timer fires again)
 exec 9>"$LOCK_FILE"
@@ -80,6 +82,8 @@ TMP_DIR="$(mktemp -d)"
 chmod 0700 "$TMP_DIR"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
+# Key material must not survive a systemd stop or Ctrl-C
+trap 'fail "interrupted"' INT TERM
 
 # Runs an az query into a file, exposing the CLI's own error text in AZ_ERROR -
 # without this a permissions failure is indistinguishable from an empty result
@@ -133,8 +137,10 @@ if ! command -v az >/dev/null 2>&1; then
     chmod 0644 /usr/share/keyrings/microsoft.gpg
     # shellcheck disable=SC1091
     . /etc/os-release
+    codename="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+    [[ -n "$codename" ]] || fail "Could not determine the distribution codename from /etc/os-release"
     printf 'deb [arch=%s signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ %s main\n' \
-      "$(dpkg --print-architecture)" "$VERSION_CODENAME" > /etc/apt/sources.list.d/azure-cli.list
+      "$(dpkg --print-architecture)" "$codename" > /etc/apt/sources.list.d/azure-cli.list
     apt-get update -qq
     apt-get install -y -qq azure-cli >>"$LOG_FILE" 2>&1 \
       || fail "Azure CLI install failed, see $LOG_FILE"
@@ -253,7 +259,7 @@ if [[ "$WEB_SERVER" == "nginx" ]]; then
     # Prefer sites-enabled so disabled vhosts are not given certificates;
     # -R (not -r) follows the symlinks it contains
     NGINX_SCAN_ROOT=/etc/nginx
-    [[ -d /etc/nginx/sites-enabled ]] && NGINX_SCAN_ROOT=/etc/nginx/sites-enabled
+    if [[ -d /etc/nginx/sites-enabled ]]; then NGINX_SCAN_ROOT=/etc/nginx/sites-enabled; fi
     while IFS= read -r conf; do
       parse_server_names "$conf"
     done < <(grep -RlE '^[[:space:]]*server_name[[:space:]]' "$NGINX_SCAN_ROOT" 2>/dev/null || true) \
@@ -281,7 +287,7 @@ else
   if [[ ! -s "$VHOST_MAP" ]]; then
     warn "No server names in $APACHE_BIN -S output, scanning Apache config instead"
     APACHE_ROOT=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
-    [[ -d "$APACHE_ROOT/sites-enabled" ]] && APACHE_ROOT="$APACHE_ROOT/sites-enabled"
+    if [[ -d "$APACHE_ROOT/sites-enabled" ]]; then APACHE_ROOT="$APACHE_ROOT/sites-enabled"; fi
     while IFS= read -r conf; do
       parse_server_names "$conf"
     done < <(grep -RlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
@@ -411,7 +417,9 @@ success "${#STALE_HOSTS[@]} of ${#MATCHED_HOSTS[@]} host(s) need a new certifica
 
 if (( DRY_RUN )); then
   for host in "${STALE_HOSTS[@]:-}"; do
-    [[ -n "$host" ]] && warn "Dry run: ${CERT_BY_HOST[$host]} would be installed to $CERT_DIR/$host"
+    if [[ -n "$host" ]]; then
+      warn "Dry run: ${CERT_BY_HOST[$host]} would be installed to $CERT_DIR/$host"
+    fi
   done
 fi
 
@@ -447,10 +455,11 @@ for cert in "${STALE_CERTS[@]:-}"; do
   [[ "$new_fingerprint" == "${CERT_FINGERPRINT[$cert]}" ]] \
     || fail "Downloaded $cert fingerprint ($new_fingerprint) does not match Key Vault (${CERT_FINGERPRINT[$cert]})"
 
-  # The key must belong to the certificate, or the reload will fail once the config is live
-  cert_modulus="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -modulus 2>/dev/null | openssl md5)"
-  key_modulus="$(openssl rsa -in "$TMP_DIR/$cert.privkey.pem" -noout -modulus 2>/dev/null | openssl md5 || true)"
-  if [[ -n "$key_modulus" && "$cert_modulus" != "$key_modulus" ]]; then
+  # The key must belong to the certificate, or the reload will fail once the config is live.
+  # Comparing public keys rather than RSA moduli also covers EC certificates.
+  cert_pubkey="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -pubkey 2>/dev/null | openssl md5)"
+  key_pubkey="$(openssl pkey -in "$TMP_DIR/$cert.privkey.pem" -pubout 2>/dev/null | openssl md5)"
+  if [[ -z "$key_pubkey" || "$cert_pubkey" != "$key_pubkey" ]]; then
     fail "Private key does not match the certificate for $cert"
   fi
 
@@ -465,7 +474,19 @@ fi
 # ---- Installing certificates ------------------------------------------------
 
 step "Installing certificates"
-BACKUP_SUFFIX=".bak.$(date +%Y%m%d%H%M%S)"
+# Backups live outside the config tree: nginx includes sites-enabled/* unsuffixed,
+# so a backup beside the original would be loaded as a second config
+BACKUP_DIR="/var/backups/keyvault-acme-update/$(date +%Y%m%d%H%M%S)"
+declare -A BACKUP_OF
+
+backup_file() {
+  local path="$1" dest
+  [[ -f "$path" ]] || return 0
+  [[ -d "$BACKUP_DIR" ]] || install -d -m 0700 -o root -g root "$BACKUP_DIR"
+  dest="$BACKUP_DIR/${path//\//_}"
+  cp -p "$path" "$dest"
+  BACKUP_OF["$path"]="$dest"
+}
 
 for host in "${STALE_HOSTS[@]:-}"; do
   [[ -n "$host" ]] || continue
@@ -474,9 +495,8 @@ for host in "${STALE_HOSTS[@]:-}"; do
   target_dir="$CERT_DIR/$host"
   install -d -m 0750 -o root -g root "$target_dir"
 
-  # Keep the previous pair so a failed config test can be rolled back
-  if [[ -f "$target_dir/fullchain.pem" ]]; then cp -p "$target_dir/fullchain.pem" "$target_dir/fullchain.pem$BACKUP_SUFFIX"; fi
-  if [[ -f "$target_dir/privkey.pem" ]]; then cp -p "$target_dir/privkey.pem" "$target_dir/privkey.pem$BACKUP_SUFFIX"; fi
+  backup_file "$target_dir/fullchain.pem"
+  backup_file "$target_dir/privkey.pem"
 
   install -m 0644 -o root -g root "$TMP_DIR/$cert.fullchain.pem" "$target_dir/fullchain.pem"
   install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
@@ -695,19 +715,16 @@ SSL_MODULE_ENABLED=0
 rollback() {
   warn "Rolling back configuration and certificates"
   if (( SSL_MODULE_ENABLED )); then a2dismod ssl >>"$LOG_FILE" 2>&1 || true; fi
-  for conf in "${TARGET_FILES[@]}"; do
-    if [[ -f "$conf$BACKUP_SUFFIX" ]]; then mv -f "$conf$BACKUP_SUFFIX" "$conf"; fi
-  done
-  for host in "${STALE_HOSTS[@]:-}"; do
-    [[ -n "$host" ]] || continue
-    if [[ -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/fullchain.pem"; fi
-    if [[ -f "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX" ]]; then mv -f "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/privkey.pem"; fi
-  done
+  if (( ${#BACKUP_OF[@]} > 0 )); then
+    for path in "${!BACKUP_OF[@]}"; do
+      cp -p "${BACKUP_OF[$path]}" "$path"
+    done
+  fi
 }
 
 for conf in "${PENDING_FILES[@]:-}"; do
   [[ -n "$conf" ]] || continue
-  cp -p "$conf" "$conf$BACKUP_SUFFIX"
+  backup_file "$conf"
   cat "${STAGED[$conf]}" > "$conf"
   info "Applied: $conf"
 done
@@ -778,11 +795,18 @@ else
   fail "$WEB_SERVER reload failed, see $LOG_FILE"
 fi
 
-# Remove superseded backups only after the new certificates are confirmed live
-for host in "${STALE_HOSTS[@]:-}"; do
-  [[ -n "$host" ]] && rm -f "$CERT_DIR/$host/fullchain.pem$BACKUP_SUFFIX" "$CERT_DIR/$host/privkey.pem$BACKUP_SUFFIX"
-done
-for conf in "${TARGET_FILES[@]}"; do rm -f "$conf$BACKUP_SUFFIX"; done
+# Config backups are kept for post-mortem, but a superseded private key must not
+# linger on disk once the replacement is confirmed live
+if (( ${#BACKUP_OF[@]} > 0 )); then
+  for path in "${!BACKUP_OF[@]}"; do
+    case "$path" in
+      *privkey.pem) shred -u "${BACKUP_OF[$path]}" 2>/dev/null || rm -f "${BACKUP_OF[$path]}" ;;
+    esac
+  done
+  info "Previous files backed up to $BACKUP_DIR"
+fi
+find /var/backups/keyvault-acme-update -mindepth 1 -maxdepth 1 -type d -mtime +30 \
+  -exec rm -rf {} + 2>/dev/null || true
 
 # ---- Summary ----------------------------------------------------------------
 
