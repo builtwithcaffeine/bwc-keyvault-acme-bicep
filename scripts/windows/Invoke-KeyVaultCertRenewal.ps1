@@ -142,6 +142,29 @@ function Get-PfxThumbprint {
   }
 }
 
+# IIS binding.certificateHash can be either byte[] or an already formatted string,
+# depending on provider/cmdlet path. Normalize both into uppercase hex with no dashes.
+function Get-BindingThumbprint {
+  param($CertificateHash)
+
+  if ($null -eq $CertificateHash) { return '' }
+  Write-Verbose "Normalizing IIS certificateHash value of runtime type '$($CertificateHash.GetType().FullName)'"
+
+  if ($CertificateHash -is [byte[]]) {
+    return [BitConverter]::ToString($CertificateHash).Replace('-', '')
+  }
+
+  if ($CertificateHash -is [string]) {
+    return ($CertificateHash -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+  }
+
+  try {
+    return [BitConverter]::ToString([byte[]]$CertificateHash).Replace('-', '')
+  } catch {
+    return ''
+  }
+}
+
 # ---- Ensuring log rotation --------------------------------------------------
 
 Step 'Ensuring log rotation'
@@ -268,7 +291,7 @@ foreach ($site in Get-Website) {
       Ip = $parts[0]
       Port = $parts[1]
       SslFlags = $sslFlags
-      Thumbprint = if ($binding.certificateHash) { [BitConverter]::ToString($binding.certificateHash).Replace('-', '') } else { '' }
+      Thumbprint = Get-BindingThumbprint $binding.certificateHash
     }
   }
 }
@@ -646,7 +669,7 @@ foreach ($hostName in $staleHosts) {
       Fail "Central Certificate Store file for $hostName reports thumbprint '$onDisk', expected '$($wanted.Thumbprint)'"
     }
   } else {
-    $actual = if ($check.certificateHash) { [BitConverter]::ToString($check.certificateHash).Replace('-', '') } else { '' }
+    $actual = Get-BindingThumbprint $check.certificateHash
     if ($actual -ne $wanted.Thumbprint) {
       Invoke-Rollback
       Fail "Binding for $hostName reports thumbprint '$actual', expected '$($wanted.Thumbprint)'"
@@ -676,7 +699,7 @@ if (-not $CcsPath -and $replaced.Count -gt 0) {
   $myStore = New-Object System.Security.Cryptography.X509Certificates.X509Store 'My', 'LocalMachine'
   $myStore.Open('ReadWrite')
   $stillBound = @(Get-WebBinding -Protocol https | ForEach-Object {
-      if ($_.certificateHash) { [BitConverter]::ToString($_.certificateHash).Replace('-', '') }
+      Get-BindingThumbprint $_.certificateHash
     })
   foreach ($thumb in ($replaced | Select-Object -Unique)) {
     if (-not $thumb -or $stillBound -contains $thumb -or $importedThumbprints -contains $thumb) { continue }
