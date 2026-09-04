@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.37.4.10188",
-      "templateHash": "9285796434470314942"
+      "version": "0.46.1.21595",
+      "templateHash": "15047407075083327359"
     },
     "name": "Microsoft Graph Application",
     "description": "Creates and configures an Azure AD application registration",
@@ -287,25 +287,11 @@
         "description": "Optional. Token encryption key ID"
       }
     },
-    "verifiedPublisher": {
-      "type": "object",
-      "defaultValue": {},
-      "metadata": {
-        "description": "Optional. Verified publisher information"
-      }
-    },
     "samlMetadataUrl": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
         "description": "Optional. SAML metadata URL"
-      }
-    },
-    "logo": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Optional. Application logo (base64 encoded)"
       }
     },
     "nativeAuthenticationApisEnabled": {
@@ -335,8 +321,18 @@
     }
   },
   "variables": {
-    "ownersConfig": "[if(not(empty(parameters('ownerIds'))), createObject('relationships', parameters('ownerIds'), 'relationshipSemantics', 'replace'), null())]",
-    "webConfig": "[if(or(or(or(or(or(not(empty(parameters('webRedirectUris'))), not(empty(parameters('homePageUrl')))), not(empty(parameters('logoutUrl')))), parameters('enableAccessTokenIssuance')), parameters('enableIdTokenIssuance')), not(empty(parameters('redirectUriSettings')))), createObject('homePageUrl', if(not(empty(parameters('homePageUrl'))), parameters('homePageUrl'), null()), 'logoutUrl', if(not(empty(parameters('logoutUrl'))), parameters('logoutUrl'), null()), 'redirectUris', parameters('webRedirectUris'), 'implicitGrantSettings', if(or(parameters('enableAccessTokenIssuance'), parameters('enableIdTokenIssuance')), createObject('enableAccessTokenIssuance', parameters('enableAccessTokenIssuance'), 'enableIdTokenIssuance', parameters('enableIdTokenIssuance')), null()), 'redirectUriSettings', parameters('redirectUriSettings')), null())]",
+    "ownersConfig": {
+      "relationships": "[parameters('ownerIds')]",
+      "relationshipSemantics": "append"
+    },
+    "webConfigBase": {
+      "homePageUrl": "[if(not(empty(parameters('homePageUrl'))), parameters('homePageUrl'), null())]",
+      "logoutUrl": "[if(not(empty(parameters('logoutUrl'))), parameters('logoutUrl'), null())]",
+      "redirectUris": "[if(not(empty(parameters('webRedirectUris'))), parameters('webRedirectUris'), createArray())]",
+      "implicitGrantSettings": "[if(or(parameters('enableAccessTokenIssuance'), parameters('enableIdTokenIssuance')), createObject('enableAccessTokenIssuance', parameters('enableAccessTokenIssuance'), 'enableIdTokenIssuance', parameters('enableIdTokenIssuance')), null())]"
+    },
+    "webConfigWithSettings": "[if(not(empty(parameters('redirectUriSettings'))), union(variables('webConfigBase'), createObject('redirectUriSettings', parameters('redirectUriSettings'))), variables('webConfigBase'))]",
+    "webConfig": "[if(or(or(or(or(or(not(empty(parameters('webRedirectUris'))), not(empty(parameters('homePageUrl')))), not(empty(parameters('logoutUrl')))), parameters('enableAccessTokenIssuance')), parameters('enableIdTokenIssuance')), not(empty(parameters('redirectUriSettings')))), variables('webConfigWithSettings'), null())]",
     "spaConfig": "[if(not(empty(parameters('spaRedirectUris'))), createObject('redirectUris', parameters('spaRedirectUris')), null())]",
     "publicClientConfig": "[if(not(empty(parameters('publicClientRedirectUris'))), createObject('redirectUris', parameters('publicClientRedirectUris')), null())]",
     "apiConfig": "[if(or(or(or(or(not(empty(parameters('oauth2PermissionScopes'))), not(empty(parameters('preAuthorizedApplications')))), not(empty(parameters('knownClientApplications')))), parameters('acceptMappedClaims')), not(equals(parameters('requestedAccessTokenVersion'), 2))), createObject('acceptMappedClaims', parameters('acceptMappedClaims'), 'knownClientApplications', parameters('knownClientApplications'), 'oauth2PermissionScopes', parameters('oauth2PermissionScopes'), 'preAuthorizedApplications', parameters('preAuthorizedApplications'), 'requestedAccessTokenVersion', parameters('requestedAccessTokenVersion')), null())]"
@@ -375,9 +371,7 @@
         "serviceManagementReference": "[if(not(empty(parameters('serviceManagementReference'))), parameters('serviceManagementReference'), null())]",
         "servicePrincipalLockConfiguration": "[if(not(empty(parameters('servicePrincipalLockConfiguration'))), parameters('servicePrincipalLockConfiguration'), null())]",
         "tokenEncryptionKeyId": "[if(not(empty(parameters('tokenEncryptionKeyId'))), parameters('tokenEncryptionKeyId'), null())]",
-        "verifiedPublisher": "[if(not(empty(parameters('verifiedPublisher'))), parameters('verifiedPublisher'), null())]",
         "samlMetadataUrl": "[if(not(empty(parameters('samlMetadataUrl'))), parameters('samlMetadataUrl'), null())]",
-        "logo": "[if(not(empty(parameters('logo'))), parameters('logo'), null())]",
         "nativeAuthenticationApisEnabled": "[if(not(equals(parameters('nativeAuthenticationApisEnabled'), 'none')), parameters('nativeAuthenticationApisEnabled'), null())]",
         "disabledByMicrosoftStatus": "[if(not(empty(parameters('disabledByMicrosoftStatus'))), parameters('disabledByMicrosoftStatus'), null())]",
         "web": "[variables('webConfig')]",
@@ -385,7 +379,7 @@
         "publicClient": "[variables('publicClientConfig')]",
         "api": "[variables('apiConfig')]",
         "optionalClaims": "[if(not(empty(parameters('optionalClaims'))), parameters('optionalClaims'), null())]",
-        "owners": "[variables('ownersConfig')]"
+        "owners": "[if(not(empty(parameters('ownerIds'))), variables('ownersConfig'), null())]"
       },
       "metadata": {
         "description": "Microsoft Graph Application"
@@ -511,6 +505,20 @@
         "description": "API configuration including OAuth2 permissions and pre-authorized apps"
       },
       "value": "[if(not(equals(reference('application').api, null())), reference('application').api, createObject())]"
+    },
+    "applicationCredentials": {
+      "type": "array",
+      "metadata": {
+        "description": "Application password credentials configuration"
+      },
+      "value": "[reference('application').passwordCredentials]"
+    },
+    "credentialCount": {
+      "type": "int",
+      "metadata": {
+        "description": "Number of password credentials configured"
+      },
+      "value": "[length(reference('application').passwordCredentials)]"
     }
   }
 }

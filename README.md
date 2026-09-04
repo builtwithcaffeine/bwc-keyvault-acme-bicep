@@ -150,6 +150,15 @@ The script runs a `what-if` first and prompts before applying changes.
 
 ---
 
+## Continuous integration
+
+- [Validate Bicep](.github/workflows/validate-bicep.yml) runs on every PR/push touching `infra/**.bicep` or `.bicepparam`: builds both deployment entrypoints, builds every module individually, and validates all parameter files. Also runs [PSRule for Azure](.github/ps-rule.yaml) (`Azure.Default` baseline) against `infra/`, with the two documented Key Vault deviations (RBAC, purge protection) explicitly excluded.
+- `main` requires the `validate` and `psrule` checks to pass before merging.
+- [Renovate](.github/renovate.json) tracks `br/public:avm/...` Bicep module versions; [Dependabot](.github/dependabot.yml) tracks GitHub Actions versions. [Check Acmebot Release](.github/workflows/check-acmebot-release.yml) separately tracks upstream Acmebot releases.
+- A failed `validate-bicep` run on `main` (i.e. a merged change that broke the build) automatically opens a tracking issue.
+
+---
+
 ## Operations checklist
 
 After deployment:

@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.37.4.10188",
-      "templateHash": "17522370156094628198"
+      "version": "0.46.1.21595",
+      "templateHash": "15905607574741787855"
     },
     "name": "Microsoft Graph Service Principals",
     "description": "Creates and configures Azure AD service principals",
@@ -23,14 +23,7 @@
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Optional. Display name for the service principal"
-      }
-    },
-    "servicePrincipalDescription": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Optional. Description of the service principal"
+        "description": "Optional. Display name for the service principal. Not sent to Microsoft Graph - the service principal always inherits displayName from its linked application. Retained for interface compatibility."
       }
     },
     "accountEnabled": {
@@ -158,10 +151,55 @@
       "metadata": {
         "description": "Optional. Application info URLs"
       }
+    },
+    "addIns": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional. Add-ins for the service principal"
+      }
+    },
+    "customSecurityAttributes": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. Custom security attributes"
+      }
+    },
+    "disabledByMicrosoftStatus": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Disabled by Microsoft status"
+      }
+    },
+    "preferredTokenSigningKeyThumbprint": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Preferred token signing key thumbprint"
+      }
+    },
+    "samlSingleSignOnSettings": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Optional. SAML single sign-on settings"
+      }
+    },
+    "tokenEncryptionKeyId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional. Token encryption key ID"
+      }
     }
   },
   "variables": {
-    "ownersConfig": "[if(not(empty(parameters('ownerIds'))), createObject('relationships', parameters('ownerIds'), 'relationshipSemantics', 'replace'), null())]"
+    "ownersConfig": {
+      "relationships": "[parameters('ownerIds')]",
+      "relationshipSemantics": "append"
+    }
   },
   "imports": {
     "microsoftGraphV1": {
@@ -175,26 +213,30 @@
       "type": "Microsoft.Graph/servicePrincipals@v1.0",
       "properties": {
         "appId": "[parameters('appId')]",
-        "displayName": "[if(not(empty(parameters('displayName'))), parameters('displayName'), null())]",
-        "description": "[if(not(empty(parameters('servicePrincipalDescription'))), parameters('servicePrincipalDescription'), null())]",
         "accountEnabled": "[parameters('accountEnabled')]",
-        "appRoleAssignmentRequired": "[parameters('appRoleAssignmentRequired')]",
+        "addIns": "[parameters('addIns')]",
         "alternativeNames": "[parameters('alternativeNames')]",
+        "appRoleAssignmentRequired": "[parameters('appRoleAssignmentRequired')]",
+        "appRoles": "[parameters('appRoles')]",
+        "customSecurityAttributes": "[if(not(empty(parameters('customSecurityAttributes'))), parameters('customSecurityAttributes'), null())]",
+        "disabledByMicrosoftStatus": "[if(not(empty(parameters('disabledByMicrosoftStatus'))), parameters('disabledByMicrosoftStatus'), null())]",
         "homepage": "[if(not(empty(parameters('homepage'))), parameters('homepage'), null())]",
+        "info": "[if(not(empty(parameters('info'))), parameters('info'), null())]",
+        "keyCredentials": "[parameters('keyCredentials')]",
         "loginUrl": "[if(not(empty(parameters('loginUrl'))), parameters('loginUrl'), null())]",
         "logoutUrl": "[if(not(empty(parameters('logoutUrl'))), parameters('logoutUrl'), null())]",
-        "replyUrls": "[parameters('replyUrls')]",
-        "servicePrincipalType": "[parameters('servicePrincipalType')]",
-        "tags": "[parameters('tags')]",
         "notes": "[if(not(empty(parameters('notes'))), parameters('notes'), null())]",
         "notificationEmailAddresses": "[parameters('notificationEmailAddresses')]",
-        "preferredSingleSignOnMode": "[if(not(empty(parameters('preferredSingleSignOnMode'))), parameters('preferredSingleSignOnMode'), null())]",
-        "appRoles": "[parameters('appRoles')]",
         "oauth2PermissionScopes": "[parameters('oauth2PermissionScopes')]",
-        "keyCredentials": "[parameters('keyCredentials')]",
+        "owners": "[if(not(empty(parameters('ownerIds'))), variables('ownersConfig'), null())]",
         "passwordCredentials": "[parameters('passwordCredentials')]",
-        "owners": "[variables('ownersConfig')]",
-        "info": "[if(not(empty(parameters('info'))), parameters('info'), null())]"
+        "preferredSingleSignOnMode": "[if(not(empty(parameters('preferredSingleSignOnMode'))), parameters('preferredSingleSignOnMode'), null())]",
+        "preferredTokenSigningKeyThumbprint": "[if(not(empty(parameters('preferredTokenSigningKeyThumbprint'))), parameters('preferredTokenSigningKeyThumbprint'), null())]",
+        "replyUrls": "[parameters('replyUrls')]",
+        "samlSingleSignOnSettings": "[if(not(empty(parameters('samlSingleSignOnSettings'))), parameters('samlSingleSignOnSettings'), null())]",
+        "servicePrincipalType": "[parameters('servicePrincipalType')]",
+        "tags": "[parameters('tags')]",
+        "tokenEncryptionKeyId": "[if(not(empty(parameters('tokenEncryptionKeyId'))), parameters('tokenEncryptionKeyId'), null())]"
       },
       "metadata": {
         "description": "Microsoft Graph Service Principal"
@@ -250,6 +292,20 @@
         "description": "Whether app role assignment is required"
       },
       "value": "[reference('servicePrincipal').appRoleAssignmentRequired]"
+    },
+    "servicePrincipalNames": {
+      "type": "array",
+      "metadata": {
+        "description": "The service principal names"
+      },
+      "value": "[reference('servicePrincipal').servicePrincipalNames]"
+    },
+    "preferredSingleSignOnMode": {
+      "type": "string",
+      "metadata": {
+        "description": "The preferred single sign-on mode"
+      },
+      "value": "[if(not(equals(reference('servicePrincipal').preferredSingleSignOnMode, null())), reference('servicePrincipal').preferredSingleSignOnMode, '')]"
     }
   }
 }
