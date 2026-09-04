@@ -61,6 +61,30 @@ jobs:
           done < <(find infra -name '*.bicepparam' -print0)
           exit "$status"
 
+  on-failure:
+    needs: [validate, psrule]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create issue for broken main
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Bicep validation failed on ${context.ref} (${context.sha.substring(0, 7)})`,
+              body: [
+                `The [Validate Bicep](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) workflow failed on \`${context.ref}\` at ${context.sha}.`,
+                '',
+                'This means a merged change broke `bicep build` or `bicep build-params`. Investigate and fix before the next deployment.'
+              ].join('\n'),
+              labels: ['bug', 'bicep'],
+              assignees: ['smoonlee']
+            });
+
   psrule:
     runs-on: ubuntu-latest
     steps:
