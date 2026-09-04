@@ -79,7 +79,6 @@ param acmeContacts = 'alerts@builtwithcaffeine.cloud'
 // Acmebot managed identity's client-id/tenant-id, with no client secret required.
 param enableGitHubActionsFederation = true
 
-// Optional: use GitHub's immutable owner/repo IDs so the credential survives renames/transfers.
 // For Windows: winget install --id 'GitHub.cli'
 // CLI Authentication: gh auth login
 // Find them via: gh api repos/{owner}/{repo} --jq '.id, .owner.id'

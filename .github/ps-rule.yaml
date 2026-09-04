@@ -1,0 +1,13 @@
+# PSRule for Azure configuration.
+# Excludes rules that conflict with documented design choices in README.md ("Known design choices in this repo").
+input:
+  pathIgnore:
+    - '**/*.test.bicep'
+    - '**/test/**'
+
+rule:
+  exclude:
+    # Key Vault intentionally uses access policies (not RBAC) for Application Gateway compatibility.
+    - Azure.KeyVault.RBAC
+    # Purge protection is intentionally disabled to allow force-purge/re-issue of certificates under the same name.
+    - Azure.KeyVault.PurgeProtect

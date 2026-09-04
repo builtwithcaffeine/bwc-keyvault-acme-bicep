@@ -1,0 +1,82 @@
+name: Validate Bicep
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**.bicep'
+      - 'infra/**.bicepparam'
+      - '.github/workflows/validate-bicep.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**.bicep'
+      - 'infra/**.bicepparam'
+
+concurrency:
+  group: validate-bicep-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bicep CLI
+        run: az bicep install
+
+      - name: Build deployment entrypoints
+        run: |
+          set -euo pipefail
+          az bicep build --file infra/create/main.bicep --outfile /tmp/create.main.json
+          echo "✅ infra/create/main.bicep built successfully"
+          az bicep build --file infra/update/main.bicep --outfile /tmp/update.main.json
+          echo "✅ infra/update/main.bicep built successfully"
+
+      - name: Build every Bicep module
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' file; do
+            if ! az bicep build --file "$file" --stdout > /dev/null; then
+              echo "::error file=${file}::Bicep build failed"
+              status=1
+            fi
+          done < <(find infra -name '*.bicep' -print0)
+          exit "$status"
+
+      - name: Validate bicepparam files
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' file; do
+            if ! az bicep build-params --file "$file" --outfile /tmp/"$(basename "$file").json" > /dev/null; then
+              echo "::error file=${file}::Bicep param build failed"
+              status=1
+            fi
+          done < <(find infra -name '*.bicepparam' -print0)
+          exit "$status"
+
+  psrule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Bicep CLI
+        run: az bicep install
+
+      # First-run tuning expected: continue-on-error until findings are triaged, then remove.
+      - name: Analyze with PSRule for Azure
+        uses: microsoft/ps-rule@46451b8f5258c41beb5ae69ed7190ccbba84112c # v2.9.0
+        continue-on-error: true
+        with:
+          modules: 'PSRule.Rules.Azure'
+          inputPath: 'infra'
+          baseline: 'Azure.Default'
+          option: '.github/ps-rule.yaml'
+          summary: true
