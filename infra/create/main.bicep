@@ -329,7 +329,7 @@ resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01'
 //
 
 // Create Resource Group
-module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.3' = {
+module createResourceGroup 'br/public:avm/res/resources/resource-group:0.4.4' = {
   name: 'create-resource-group-${locationShortCode}'
   params: {
     name: resourceGroupName
@@ -500,7 +500,7 @@ module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-gr
   ]
 }
 
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.0' = if (enableCreateVirtualNetwork) {
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = if (enableCreateVirtualNetwork) {
   name: 'create-virtual-network-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -777,7 +777,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
   ]
 }
 
-module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.16.0' = {
+module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
   name: 'create-log-analytics-workspace-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
