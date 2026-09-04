@@ -7,7 +7,7 @@ This folder contains the Bicep entrypoint used to deploy the full Acmebot platfo
 - Creates the resource group, managed identities, storage, Key Vault, observability, and Function App
 - Deploys Microsoft Entra resources through the Microsoft Graph Bicep extension
 - Deploys the Acmebot package into the Function App using OneDeploy
-- Supports optional virtual network and private DNS creation
+- Supports three network topologies via `networkTopology`: `standalone`, `hubSpoke` and `existing`
 
 ## Files
 

@@ -71,12 +71,32 @@ jobs:
 
       - name: Update changelog
         if: steps.compare.outputs.changed == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.latest.outputs.tag }}
+          FROM_VERSION: ${{ steps.current.outputs.version }}
+          TO_VERSION: ${{ steps.latest.outputs.version }}
         run: |
           set -euo pipefail
-          entry="## ${{ steps.latest.outputs.tag }} - $(date -u +%Y-%m-%d)\n\n- Bumped \`acmebotReleaseTag\` from \`${{ steps.current.outputs.version }}\` to \`${{ steps.latest.outputs.version }}\`.\n- [Release notes](https://github.com/${ACMEBOT_REPO}/releases/tag/${{ steps.latest.outputs.tag }})\n"
+          entryfile=$(mktemp)
+          {
+            printf '## %s - %s\n\n' "$RELEASE_TAG" "$(date -u +%Y-%m-%d)"
+            printf -- '- Bumped `acmebotReleaseTag` from `%s` to `%s`.\n' "$FROM_VERSION" "$TO_VERSION"
+            printf -- '- [Release notes](https://github.com/%s/releases/tag/%s)\n\n\n' "$ACMEBOT_REPO" "$RELEASE_TAG"
+          } > "$entryfile"
+          # Insert above the newest existing release heading rather than at a fixed line offset
           tmpfile=$(mktemp)
-          { head -n 4 CHANGELOG.md; echo -e "\n${entry}"; tail -n +5 CHANGELOG.md; } > "$tmpfile"
+          awk -v entryfile="$entryfile" '
+            function emit_entry(   line) {
+              while ((getline line < entryfile) > 0) print line
+              close(entryfile)
+              inserted = 1
+            }
+            !inserted && /^## / { emit_entry() }
+            { print }
+            END { if (!inserted) emit_entry() }
+          ' CHANGELOG.md > "$tmpfile"
           mv "$tmpfile" CHANGELOG.md
+          grep -qF "## ${RELEASE_TAG} - " CHANGELOG.md
 
       - name: Setup Bicep CLI
         if: steps.compare.outputs.changed == 'true'

@@ -36,6 +36,9 @@
 .PARAMETER tenantId
     Tenant Id (required for 'tenant' scope).
 
+.PARAMETER templateFile
+  Optional Bicep template file path. Relative paths are resolved from the caller's working directory.
+
 .EXAMPLE
     .\Invoke-AzDeployment.ps1 -targetScope sub -subscriptionId <subId> -environmentType dev -customerName Contoso -location eastus -deploy
 
@@ -51,7 +54,7 @@
     Script Version: 2.0
 #>
 
-# Requires -Version 7.0
+#Requires -Version 7.0
 
 [CmdletBinding(SupportsShouldProcess)]
 param (
@@ -103,43 +106,52 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$templateFile = if ([System.IO.Path]::IsPathRooted($templateFile)) {
+  $templateFile
+} elseif ($templateFile -eq './main.bicep') {
+  Join-Path $PSScriptRoot 'main.bicep'
+} else {
+  Join-Path (Get-Location) $templateFile
+}
+$parametersFile = Join-Path $PSScriptRoot 'param.main.bicepparam'
+
 # Centralized scope profile
 $scopeProfiles = @{
   'sub'    = @{
-    DisplayName = 'Subscription'
-    DeployScopeCode = 'sub'
-    RequiredParameterName = 'subscriptionId'
+    DisplayName            = 'Subscription'
+    DeployScopeCode        = 'sub'
+    RequiredParameterName  = 'subscriptionId'
     RequiredParameterValue = $subscriptionId
     ScopeContextLinePrefix = $null
-    ScopeContextValue = $null
-    ScopeTarget = "Subscription '$subscriptionId'"
-    DeploymentPath = "/subscriptions/$subscriptionId/providers/Microsoft.Resources/deployments"
-    CliScopeArgName = '--subscription'
-    CliScopeArgValue = $subscriptionId
+    ScopeContextValue      = $null
+    ScopeTarget            = "Subscription '$subscriptionId'"
+    DeploymentPath         = "/subscriptions/$subscriptionId/providers/Microsoft.Resources/deployments"
+    CliScopeArgName        = '--subscription'
+    CliScopeArgValue       = $subscriptionId
   }
   'mg'     = @{
-    DisplayName = 'Management Group'
-    DeployScopeCode = 'mg'
-    RequiredParameterName = 'managementGroupId'
+    DisplayName            = 'Management Group'
+    DeployScopeCode        = 'mg'
+    RequiredParameterName  = 'managementGroupId'
     RequiredParameterValue = $managementGroupId
     ScopeContextLinePrefix = 'Management Group Id..'
-    ScopeContextValue = $managementGroupId
-    ScopeTarget = "Management Group '$managementGroupId'"
-    DeploymentPath = "/providers/Microsoft.Management/managementGroups/$managementGroupId/providers/Microsoft.Resources/deployments"
-    CliScopeArgName = '--management-group-id'
-    CliScopeArgValue = $managementGroupId
+    ScopeContextValue      = $managementGroupId
+    ScopeTarget            = "Management Group '$managementGroupId'"
+    DeploymentPath         = "/providers/Microsoft.Management/managementGroups/$managementGroupId/providers/Microsoft.Resources/deployments"
+    CliScopeArgName        = '--management-group-id'
+    CliScopeArgValue       = $managementGroupId
   }
   'tenant' = @{
-    DisplayName = 'Tenant'
-    DeployScopeCode = 'tn'
-    RequiredParameterName = 'tenantId'
+    DisplayName            = 'Tenant'
+    DeployScopeCode        = 'tn'
+    RequiredParameterName  = 'tenantId'
     RequiredParameterValue = $tenantId
     ScopeContextLinePrefix = 'Tenant Id............'
-    ScopeContextValue = $tenantId
-    ScopeTarget = "Tenant '$tenantId'"
-    DeploymentPath = '/providers/Microsoft.Resources/deployments'
-    CliScopeArgName = $null
-    CliScopeArgValue = $null
+    ScopeContextValue      = $tenantId
+    ScopeTarget            = "Tenant '$tenantId'"
+    DeploymentPath         = '/providers/Microsoft.Resources/deployments'
+    CliScopeArgName        = $null
+    CliScopeArgValue       = $null
   }
 }
 
@@ -187,8 +199,8 @@ function Get-AzCliVersion {
 
   # Get the latest release version from GitHub
   try {
-    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/azure-cli/releases/latest"
-    $latestVersion = $latestRelease.tag_name.TrimStart('azure-cli-')
+    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/azure-cli/releases/latest" -TimeoutSec 10
+    $latestVersion = $latestRelease.tag_name -replace '^azure-cli-', ''
   } catch {
     Write-Warning "Unable to fetch the latest release. Ensure you have internet connectivity."
     return
@@ -254,8 +266,8 @@ function Get-BicepVersion {
 
   # Get the latest release version from GitHub
   try {
-    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/bicep/releases/latest"
-    $latestVersion = $latestRelease.tag_name.TrimStart('v')
+    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/bicep/releases/latest" -TimeoutSec 10
+    $latestVersion = $latestRelease.tag_name -replace '^v', ''
   } catch {
     Write-Warning "Unable to fetch the latest release. Ensure you have internet connectivity."
     return
@@ -351,9 +363,19 @@ function Get-AzIdentity {
       $azUserAccountName = $signedInPrincipal
       $azIdentityObjectId = $userDetails.id
       $userDisplayName = if ($userDetails.displayName) { $userDetails.displayName } else { $azUserAccountName }
-      Write-IdentityStatusLine -Label 'Azure Identity Type' -Value 'User'
+
+      # Guests sign in with their home address but exist here as <name>#EXT#@<tenant>, which az cannot resolve from the sign-in name
+      $userProperties = $userDetails.PSObject.Properties.Name
+      $directoryUpn = if ($userProperties -contains 'userPrincipalName') { $userDetails.userPrincipalName } else { $null }
+      $graphUserType = if ($userProperties -contains 'userType') { $userDetails.userType } else { $null }
+      $isGuestAccount = ($graphUserType -eq 'Guest') -or ($directoryUpn -like '*#EXT#@*')
+
+      Write-IdentityStatusLine -Label 'Azure Identity Type' -Value $(if ($isGuestAccount) { 'User (Guest)' } else { 'User' })
       Write-IdentityStatusLine -Label 'User Account Email' -Value $azUserAccountName
       Write-IdentityStatusLine -Label 'Display Name' -Value $userDisplayName
+      if ($isGuestAccount -and $directoryUpn) {
+        Write-IdentityStatusLine -Label 'Directory UPN' -Value $directoryUpn
+      }
       $azIdentityName = $azUserAccountName
     } else {
       Write-Warning "Unknown Azure Identity Type: $identityType"
@@ -361,28 +383,30 @@ function Get-AzIdentity {
     }
 
     # Get Role Assignments
-    $rbacJson = az role assignment list --assignee $signedInPrincipal --include-groups --include-inherited --output json 2>$null
+    # Query by object id rather than sign-in name, otherwise guest accounts resolve to nothing
+    $rbacAssignee = if ($azIdentityObjectId) { $azIdentityObjectId } else { $signedInPrincipal }
+    $rbacJson = az role assignment list --assignee $rbacAssignee --include-groups --include-inherited --all --output json 2>$null
     $rbacAssignments = if ($LASTEXITCODE -eq 0 -and $rbacJson) { $rbacJson | ConvertFrom-Json } else { $null }
     if ($rbacAssignments) {
       $roles = $rbacAssignments | Select-Object -ExpandProperty roleDefinitionName -Unique
       Write-IdentityStatusLine -Label 'RBAC Assignments' -Value ($roles -join ', ')
     } else {
-      Write-Warning "No RBAC assignments found for the identity."
+      Write-Warning "No RBAC assignments found for object id '$rbacAssignee' in the current scope. Deployment will fail unless access is granted."
       return $azIdentityName
     }
 
     # Evaluate Owner/Contributor scoped group memberships
     $scopeContextProfiles = @{
       'sub'    = @{
-        RoleCheckScope = "/subscriptions/$SubscriptionId"
+        RoleCheckScope      = "/subscriptions/$SubscriptionId"
         RoleCheckScopeLabel = "subscription $SubscriptionId"
       }
       'mg'     = @{
-        RoleCheckScope = "/providers/Microsoft.Management/managementGroups/$ManagementGroupId"
+        RoleCheckScope      = "/providers/Microsoft.Management/managementGroups/$ManagementGroupId"
         RoleCheckScopeLabel = "management group $ManagementGroupId"
       }
       'tenant' = @{
-        RoleCheckScope = '/'
+        RoleCheckScope      = '/'
         RoleCheckScopeLabel = "tenant root ($TenantId)"
       }
     }
@@ -409,8 +433,8 @@ function Get-AzIdentity {
           }
 
           $roleGroups = $roleAssignments |
-            Where-Object { $_.principalType -eq 'Group' } |
-            Sort-Object -Property principalId -Unique
+          Where-Object { $_.principalType -eq 'Group' } |
+          Sort-Object -Property principalId -Unique
 
           $membershipMatches = [System.Collections.Generic.List[string]]::new()
           if ($roleGroups) {
@@ -654,8 +678,6 @@ Write-Host "Environment..........: $environmentType"
 if ($deploy) {
   $scopeTarget = $scopeProfile.ScopeTarget
   if ($PSCmdlet.ShouldProcess($scopeTarget, "Deploy Bicep template '$templateFile' to $location")) {
-    $deployStartTime = Get-Date
-
     Write-Host ""
 
     # Deploy Bicep Template - Build scope-aware portal link
@@ -667,7 +689,7 @@ if ($deploy) {
       '--name', $deployName,
       '--location', $location,
       '--template-file', $templateFile,
-      '--parameters', './param.main.bicepparam',
+      '--parameters', $parametersFile,
       '--parameters',
       "location=$location",
       "locationShortCode=$($locationShortCodeMap.$location)",
@@ -694,6 +716,7 @@ if ($deploy) {
       return
     }
 
+    $deployStartTime = Get-Date
     Write-Host ""
     Write-Host "> Deployment [$azDeployGuidLink] Started at $($deployStartTime.ToString('HH:mm:ss'))"
 
