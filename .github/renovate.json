@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["bicep"],
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies", "bicep"],
+  "assignees": ["smoonlee"],
+  "commitMessagePrefix": "[Bicep Update]",
+  "packageRules": [
+    {
+      "matchManagers": ["bicep"],
+      "groupName": "AVM Bicep modules",
+      "matchDatasources": ["bicep"]
+    }
+  ]
+}
