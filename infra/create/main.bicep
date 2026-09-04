@@ -273,7 +273,7 @@ var privateDnsZonesArray = [
 //
 // Azure Resource - [Existing]
 
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (!enableCreateVirtualNetwork) {
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-09-01' existing = if (!enableCreateVirtualNetwork) {
   scope: resourceGroup(existingVirtualNetworkResourceGroup)
   name: existingVirtualNetworkName
 }
