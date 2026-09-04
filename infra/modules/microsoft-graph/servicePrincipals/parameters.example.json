@@ -8,9 +8,6 @@
     "displayName": {
       "value": "My Sample Service Principal"
     },
-    "servicePrincipalDescription": {
-      "value": "A sample service principal created using the Microsoft Graph Bicep module"
-    },
     "accountEnabled": {
       "value": true
     },
