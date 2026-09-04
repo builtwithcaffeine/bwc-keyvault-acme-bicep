@@ -1,299 +1,826 @@
 #!/usr/bin/env bash
+#
+# Renews an nginx/Apache TLS certificate from Azure Key Vault using the VM's managed identity.
+#
+# Usage:
+#   sudo ./Invoke-KeyVaultCertRenewal.sh [--key-vault-name NAME] [--client-id GUID] [--cert-dir PATH]
+#                                        [--no-tls-append] [--dry-run]
+#
 set -euo pipefail
 
-# Force C locale so date/openssl output parsing (notAfter=, fingerprint=) never
-# depends on the system locale.
+# Parsing of openssl (notAfter=, sha256 Fingerprint=) and date output must not vary by locale
 export LC_ALL=C
-
-# Restrict permissions on every file this script creates (lock file, temp cert/key
-# material, az stderr scratch file) to the owner (root) by default.
+# Lock file, temp cert/key material and az scratch files are owner-only by default
 umask 077
 
-# Manual overrides - set either to skip auto-detection, leave empty to auto-detect
-KEYVAULT_NAME=""
-AZURE_CLIENT_ID=""
+# ---- Configuration ----------------------------------------------------------
 
-# Log rotation configuration
-LOG_FILE="/var/log/keyvault-cert-renewal.log"
-LOGROTATE_CONF="/etc/logrotate.d/keyvault-cert-renewal"
-chmod 640 "${LOG_FILE}" 2>/dev/null || true
+KEY_VAULT_NAME="${KEY_VAULT_NAME:-}"     # empty = auto-detect the single accessible vault
+AZURE_CLIENT_ID="${AZURE_CLIENT_ID:-}"   # empty = system-assigned identity
+CERT_DIR="${CERT_DIR:-/etc/ssl}"        # certificates are installed to <CERT_DIR>/<fqdn>/
+APPEND_TLS=1                             # generate a TLS vhost when one is missing
+LOG_FILE="/var/log/keyvault-acme-update.log"
+LOCK_FILE="/run/keyvault-acme-update.lock"
+LOGROTATE_FILE="/etc/logrotate.d/keyvault-acme-update"
+DRY_RUN=0
 
-# Prevent overlapping runs (e.g. a slow run still executing when cron fires again)
-LOCK_FILE="/var/run/keyvault-cert-renewal.lock"
-exec 200>"${LOCK_FILE}"
-if ! flock -n 200; then
-  echo "$(date '+[ %Y-%m-%d - %H:%M:%S ]') another run is already in progress, exiting" >&2
-  exit 1
+need_value() { [[ -n "${2:-}" ]] || { echo "$1 requires a value" >&2; exit 2; }; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --key-vault-name) need_value "$1" "${2:-}"; KEY_VAULT_NAME="$2"; shift 2 ;;
+    --client-id)      need_value "$1" "${2:-}"; AZURE_CLIENT_ID="$2"; shift 2 ;;
+    --cert-dir)       need_value "$1" "${2:-}"; CERT_DIR="$2"; shift 2 ;;
+    --no-tls-append)  APPEND_TLS=0; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
+    -h|--help)        sed -n '2,8p' "$0"; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || { echo "This script must be run as root." >&2; exit 1; }
+
+# ---- Logging helpers --------------------------------------------------------
+
+# Created only when absent - installing /dev/null over an existing log would truncate it
+if [[ ! -f "$LOG_FILE" ]]; then
+  install -m 0640 -o root -g root /dev/null "$LOG_FILE"
+else
+  chmod 0640 "$LOG_FILE"
 fi
 
-# Scratch file for az's stderr, kept separate from stdout so a stray warning can
-# never corrupt a captured value (e.g. a base64 secret). Cleaned up on exit
-# alongside any later temp cert material, regardless of how the script terminates.
-AZ_STDERR_FILE=$(mktemp)
-trap 'rm -f "${AZ_STDERR_FILE}"; [ -n "${TMP_DIR:-}" ] && rm -rf "${TMP_DIR}"' EXIT
-
-# Color/formatting helpers, disabled automatically when not attached to a terminal
-if [ -t 1 ] && command -v tput >/dev/null 2>&1; then
-  C_RESET=$(tput sgr0); C_BOLD=$(tput bold)
-  C_CYAN=$(tput setaf 6); C_GREEN=$(tput setaf 2)
+# Colour is applied to the console only, so the log file stays plain text
+if [[ -t 1 ]] && [[ -n "${TERM:-}" && "$TERM" != dumb ]] && command -v tput >/dev/null 2>&1; then
+  C_RESET=$(tput sgr0); C_CYAN=$(tput setaf 6); C_GREEN=$(tput setaf 2)
   C_YELLOW=$(tput setaf 3); C_RED=$(tput setaf 1)
 else
-  C_RESET=""; C_BOLD=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+  C_RESET=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""
 fi
 
-ts()      { date '+[ %Y-%m-%d - %H:%M:%S ]'; }
-step()    { printf '\n%s %s==>%s %s%s%s\n' "$(ts)" "${C_CYAN}" "${C_RESET}" "${C_BOLD}" "$1" "${C_RESET}"; }
-info()    { printf '%s     %s\n' "$(ts)" "$1"; }
-success() { printf '%s %s✔%s %s\n' "$(ts)" "${C_GREEN}" "${C_RESET}" "$1"; }
-warn()    { printf '%s %s⚠%s %s\n' "$(ts)" "${C_YELLOW}" "${C_RESET}" "$1"; }
-fail()    { printf '%s %s✘%s %s\n' "$(ts)" "${C_RED}" "${C_RESET}" "$1" >&2; exit 1; }
-
-# Runs `az "$@"`, capturing stdout and stderr into separate variables (never merged,
-# so stray stderr text like a deprecation warning can't corrupt a captured stdout
-# value) and the exit code explicitly instead of relying on process substitution.
-az_call() {
-  local rc
-  AZ_OUTPUT=$(az "$@" 2>"${AZ_STDERR_FILE}") && rc=0 || rc=$?
-  AZ_STDERR=$(cat "${AZ_STDERR_FILE}" 2>/dev/null || true)
-  : > "${AZ_STDERR_FILE}"
-  return "${rc}"
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+# Warnings and failures go to stderr so systemd records them at the right priority
+emit() {
+  local tag="$1" colour="$2" text="$3" to_stderr="${4:-}" now line
+  now="$(ts)"
+  printf '%s %-3s %s\n' "$now" "$tag" "$text" >> "$LOG_FILE"
+  line="$(printf '%s %b%-3s%b %s' "$now" "$colour" "$tag" "$C_RESET" "$text")"
+  if [[ -n "$to_stderr" ]]; then printf '%s\n' "$line" >&2; else printf '%s\n' "$line"; fi
 }
 
-step "Checking Azure CLI"
-if ! command -v az >/dev/null 2>&1; then
-  warn "Azure CLI not found, installing..."
-  installer_script=$(mktemp)
-  curl -sL --fail https://aka.ms/InstallAzureCLIDeb -o "${installer_script}"
-  info "Installer sha256: $(sha256sum "${installer_script}" | cut -d' ' -f1)"
-  bash "${installer_script}"
-  rm -f "${installer_script}"
-fi
-success "Azure CLI available"
+step()    { echo; emit '==>' "$C_CYAN" "$*"; }
+info()    { emit ''  ''          "$*"; }
+detail()  { emit ''  ''          "  $*"; }
+success() { emit 'OK' "$C_GREEN"  "$*"; }
+warn()    { emit '!!' "$C_YELLOW" "$*" err; }
+fail()    { emit 'XX' "$C_RED"    "$*" err; exit 1; }
+
+# Prevent overlapping runs (e.g. a slow run still executing when the timer fires again)
+exec 9>"$LOCK_FILE"
+flock -n 9 || { warn "another run is already in progress, exiting"; exit 1; }
+
+TMP_DIR="$(mktemp -d)"
+chmod 0700 "$TMP_DIR"
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+# Key material must not survive a systemd stop or Ctrl-C
+trap 'fail "interrupted"' INT TERM
+
+# Runs an az query into a file, exposing the CLI's own error text in AZ_ERROR -
+# without this a permissions failure is indistinguishable from an empty result
+AZ_ERROR=""
+az_tsv() {
+  local out="$1"; shift
+  local err="$TMP_DIR/az-err.txt"
+  AZ_ERROR=""
+  if az "$@" -o tsv > "$out" 2>"$err"; then return 0; fi
+  cat "$err" >> "$LOG_FILE"
+  AZ_ERROR="$(tr '\n' ' ' < "$err" | tr -s ' ' | cut -c1-300)"
+  return 1
+}
+
+# ---- Ensuring log rotation --------------------------------------------------
 
 step "Ensuring log rotation"
-if command -v logrotate >/dev/null 2>&1; then
-  cat > "${LOGROTATE_CONF}" <<EOF
-${LOG_FILE} {
+if [[ ! -f "$LOGROTATE_FILE" ]]; then
+  cat > "$LOGROTATE_FILE" <<EOF
+$LOG_FILE {
     daily
     rotate 30
-    maxage 30
     missingok
     notifempty
     compress
     delaycompress
     copytruncate
+    create 0640 root root
 }
 EOF
-  success "Log rotation configured: ${LOGROTATE_CONF} (${LOG_FILE}, 30 days)"
+  chmod 0644 "$LOGROTATE_FILE"
+  success "Created $LOGROTATE_FILE (30 days)"
 else
-  warn "logrotate not found, skipping log rotation setup"
+  success "Log rotation already configured"
 fi
 
-step "Detecting web server"
-WEBSERVER=""
-SITES_ENABLED_DIR=""
-SERVER_NAME_DIRECTIVE=""
+# ---- Checking Azure CLI -----------------------------------------------------
 
-if command -v nginx >/dev/null 2>&1; then
-  WEBSERVER="nginx"
-  SITES_ENABLED_DIR="/etc/nginx/sites-enabled"
-  SERVER_NAME_DIRECTIVE="server_name"
-elif command -v apache2ctl >/dev/null 2>&1 || command -v httpd >/dev/null 2>&1; then
-  WEBSERVER="apache"
-  SITES_ENABLED_DIR="/etc/apache2/sites-enabled"
-  SERVER_NAME_DIRECTIVE="ServerName"
-else
-  fail "Neither nginx nor apache is installed"
-fi
-
-success "Detected web server: ${WEBSERVER}"
-
-if [ ! -d "${SITES_ENABLED_DIR}" ]; then
-  fail "Sites-enabled directory not found at ${SITES_ENABLED_DIR}"
-fi
-
-step "Collecting server names from ${SITES_ENABLED_DIR}"
-# -R (not -r) so symlinked configs (the norm for sites-enabled) are followed
-# (uses [[:space:]] instead of \s, which isn't portable in POSIX ERE)
-# guarded with || true - an empty match must not trip set -e/pipefail silently
-raw_server_names=$(grep -RhoE "^[[:space:]]*${SERVER_NAME_DIRECTIVE}[[:space:]]+[^;#]+" "${SITES_ENABLED_DIR}" 2>/dev/null || true)
-
-if [ -z "${raw_server_names}" ]; then
-  if [ "${WEBSERVER}" = "nginx" ]; then
-    example="server_name example.com;"
+step "Checking Azure CLI"
+if ! command -v az >/dev/null 2>&1; then
+  warn "Azure CLI not found, installing..."
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq curl ca-certificates gnupg apt-transport-https >/dev/null
+    # Registering the signed repo lets apt verify every package, unlike piping the
+    # installer script straight into a root shell
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+      | gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg \
+      || fail "Could not import the Microsoft signing key"
+    chmod 0644 /usr/share/keyrings/microsoft.gpg
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    codename="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+    [[ -n "$codename" ]] || fail "Could not determine the distribution codename from /etc/os-release"
+    printf 'deb [arch=%s signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ %s main\n' \
+      "$(dpkg --print-architecture)" "$codename" > /etc/apt/sources.list.d/azure-cli.list
+    apt-get update -qq
+    apt-get install -y -qq azure-cli >>"$LOG_FILE" 2>&1 \
+      || fail "Azure CLI install failed, see $LOG_FILE"
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    PKG=$(command -v dnf || command -v yum)
+    rpm --import https://packages.microsoft.com/keys/microsoft.asc
+    "$PKG" install -y https://packages.microsoft.com/config/rhel/9/packages-microsoft-prod.rpm >>"$LOG_FILE" 2>&1 || true
+    "$PKG" install -y azure-cli >>"$LOG_FILE" 2>&1 || fail "Azure CLI install failed, see $LOG_FILE"
+  elif command -v zypper >/dev/null 2>&1; then
+    rpm --import https://packages.microsoft.com/keys/microsoft.asc
+    zypper install -y azure-cli >>"$LOG_FILE" 2>&1 || fail "Azure CLI install failed, see $LOG_FILE"
   else
-    example="ServerName example.com"
+    fail "Unsupported distribution - install the Azure CLI manually and re-run."
   fi
-  fail "No ${SERVER_NAME_DIRECTIVE} entries found in any file under ${SITES_ENABLED_DIR}. Add a directive like '${example}' to your site config and re-run."
 fi
+command -v az >/dev/null 2>&1 || fail "Azure CLI installation could not be verified."
+command -v openssl >/dev/null 2>&1 || fail "openssl is required but not installed."
+success "Azure CLI Installed: $(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo unknown)"
 
-raw_server_names=$(echo "${raw_server_names}" | awk '{$1=""; print}')
-raw_server_names=$(echo "${raw_server_names}" | tr -s ' \t' '\n')
-raw_server_names=$(echo "${raw_server_names}" | sed '/^$/d')
-mapfile -t SERVER_NAMES < <(echo "${raw_server_names}" | sort -u)
-
-if [ "${#SERVER_NAMES[@]}" -eq 0 ]; then
-  fail "No ${SERVER_NAME_DIRECTIVE} entries found in ${SITES_ENABLED_DIR}"
-fi
-
-success "Found ${#SERVER_NAMES[@]} server name(s)"
-for server_name in "${SERVER_NAMES[@]}"; do
-  info "- ${server_name}"
-done
+# ---- Authenticating to Azure ------------------------------------------------
 
 step "Authenticating to Azure"
-# AZURE_CLIENT_ID selects the user-assigned identity, if set
-if ! az_call account show; then
-  info "Logging in using managed identity..."
-  if [ -n "${AZURE_CLIENT_ID:-}" ]; then
-    az_call login --identity --username "${AZURE_CLIENT_ID}" || fail "az login --identity failed: ${AZ_STDERR}"
-  else
-    az_call login --identity || fail "az login --identity failed: ${AZ_STDERR}"
-  fi
+if [[ -n "$AZURE_CLIENT_ID" ]]; then
+  # Always re-login: a cached session may belong to a different identity on this VM
+  # --client-id replaced --username in newer Azure CLI releases, so try both
+  az login --identity --client-id "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+    || az login --identity --username "$AZURE_CLIENT_ID" >/dev/null 2>>"$LOG_FILE" \
+    || fail "az login --identity for $AZURE_CLIENT_ID failed, see $LOG_FILE"
+  info "Using user-assigned identity: $AZURE_CLIENT_ID"
+elif ! az account show >/dev/null 2>&1; then
+  az login --identity >/dev/null 2>>"$LOG_FILE" \
+    || fail "az login --identity failed, see $LOG_FILE"
+  info "Using system-assigned identity"
+else
+  info "Using existing Azure CLI session"
 fi
 success "Authenticated to Azure"
 
-step "Locating Key Vault"
-if [ -n "${KEYVAULT_NAME}" ]; then
-  info "Using manual override"
-else
-  # Only one Key Vault is expected to be accessible to this managed identity
-  az_call keyvault list --query "[].name" -o tsv || fail "az keyvault list failed: ${AZ_STDERR}"
-  mapfile -t KEYVAULTS <<< "${AZ_OUTPUT}"
-  KEYVAULTS=("${KEYVAULTS[@]//$'\r'/}")
+# ---- Detecting web server ---------------------------------------------------
 
-  if [ "${#KEYVAULTS[@]}" -eq 0 ] || [ -z "${KEYVAULTS[0]}" ]; then
-    fail "No Key Vault accessible to this managed identity"
-  elif [ "${#KEYVAULTS[@]}" -gt 1 ]; then
-    fail "Expected exactly one accessible Key Vault, found ${#KEYVAULTS[@]}: ${KEYVAULTS[*]}"
+step "Detecting web server"
+WEB_SERVER=""
+APACHE_BIN=""
+if command -v nginx >/dev/null 2>&1; then
+  WEB_SERVER="nginx"
+elif command -v apachectl >/dev/null 2>&1; then
+  WEB_SERVER="apache"; APACHE_BIN="apachectl"
+elif command -v apache2ctl >/dev/null 2>&1; then
+  WEB_SERVER="apache"; APACHE_BIN="apache2ctl"
+elif command -v httpd >/dev/null 2>&1; then
+  WEB_SERVER="apache"; APACHE_BIN="httpd"
+else
+  fail "Neither nginx nor Apache was found on this host"
+fi
+success "Detected web server: $WEB_SERVER"
+
+# A config that is already broken must not be blamed on - or rolled back by - this run
+CONFIG_OK=1
+if [[ "$WEB_SERVER" == "nginx" ]]; then
+  nginx -t >"$TMP_DIR/preflight.txt" 2>&1 || CONFIG_OK=0
+else
+  "$APACHE_BIN" -t >"$TMP_DIR/preflight.txt" 2>&1 || CONFIG_OK=0
+fi
+if (( CONFIG_OK )); then
+  info "Existing configuration passes its config test"
+else
+  cat "$TMP_DIR/preflight.txt" >> "$LOG_FILE"
+  warn "Existing configuration is already invalid, $WEB_SERVER cannot be reloaded until it is fixed:"
+  warn "$(grep -m1 -iE 'emerg|error|syntax' "$TMP_DIR/preflight.txt" || head -n1 "$TMP_DIR/preflight.txt")"
+fi
+
+# ---- Collecting server names ------------------------------------------------
+
+step "Collecting server names"
+# Each entry is "hostname<TAB>config-file" so the matching vhost can be updated later
+VHOST_MAP="$TMP_DIR/vhosts.tsv"
+: > "$VHOST_MAP"
+
+# Extracts "server_name a b c;" / "ServerName a" / "ServerAlias a b" from a config file
+parse_server_names() {
+  local conf="$1"
+  awk -v conf="$conf" '
+    /^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]/ {
+      line = $0
+      sub(/#.*$/, "", line); sub(/;.*$/, "", line)
+      sub(/^[[:space:]]*(server_name|ServerName|ServerAlias)[[:space:]]+/, "", line)
+      n = split(line, names, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" conf
+      }
+    }
+  ' "$conf"
+}
+
+if [[ "$WEB_SERVER" == "nginx" ]]; then
+  # nginx -T dumps the fully resolved config, annotated with "# configuration file <path>:"
+  if nginx -T > "$TMP_DIR/nginx-dump.txt" 2>"$TMP_DIR/nginx-err.txt"; then
+    awk '
+      /^# configuration file / { file = $4; sub(/:$/, "", file); next }
+      /^[[:space:]]*server_name[[:space:]]/ {
+        line = $0
+        sub(/#.*$/, "", line); sub(/;.*$/, "", line)
+        sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+        n = split(line, names, /[[:space:]]+/)
+        for (i = 1; i <= n; i++) {
+          if (names[i] != "" && names[i] != "_" && names[i] !~ /^[*~]/) print names[i] "\t" file
+        }
+      }
+    ' "$TMP_DIR/nginx-dump.txt" | sort -u > "$VHOST_MAP"
+  else
+    # A config test failure is expected on first run, when the vhost still points at a
+    # certificate path this script has not created yet - fall back to scanning the tree
+    cat "$TMP_DIR/nginx-err.txt" >> "$LOG_FILE"
+    warn "nginx -T failed: $(head -n 3 "$TMP_DIR/nginx-err.txt" | tr '\n' ' ')"
+    warn "Falling back to scanning nginx config for server names"
+    # Prefer sites-enabled so disabled vhosts are not given certificates;
+    # -R (not -r) follows the symlinks it contains
+    NGINX_SCAN_ROOT=/etc/nginx
+    if [[ -d /etc/nginx/sites-enabled ]]; then NGINX_SCAN_ROOT=/etc/nginx/sites-enabled; fi
+    while IFS= read -r conf; do
+      parse_server_names "$conf"
+    done < <(grep -RlE '^[[:space:]]*server_name[[:space:]]' "$NGINX_SCAN_ROOT" 2>/dev/null || true) \
+      | sort -u > "$VHOST_MAP"
+  fi
+else
+  # apachectl -S lines all end in "(<file>:<line>)" preceded by the host name, whether
+  # they read "port 443 namevhost x.com (...)", "*:80 x.com (...)" or "default server x.com (...)"
+  if "$APACHE_BIN" -S > "$TMP_DIR/apache-dump.txt" 2>&1; then
+    awk '
+      $NF ~ /^\(\/.*:[0-9]+\)$/ && NF >= 2 {
+        host = $(NF - 1)
+        file = $NF
+        gsub(/[()]/, "", file)
+        sub(/:[0-9]+$/, "", file)
+        if (host ~ /\./ && host !~ /^[*:]/) print host "\t" file
+      }
+    ' "$TMP_DIR/apache-dump.txt" | sort -u > "$VHOST_MAP"
+  else
+    cat "$TMP_DIR/apache-dump.txt" >> "$LOG_FILE"
+    warn "$APACHE_BIN -S failed: $(head -n 3 "$TMP_DIR/apache-dump.txt" | tr '\n' ' ')"
   fi
 
-  KEYVAULT_NAME="${KEYVAULTS[0]}"
+  # -S reports nothing useful when every vhost lacks a ServerName, so scan the tree
+  if [[ ! -s "$VHOST_MAP" ]]; then
+    warn "No server names in $APACHE_BIN -S output, scanning Apache config instead"
+    APACHE_ROOT=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
+    if [[ -d "$APACHE_ROOT/sites-enabled" ]]; then APACHE_ROOT="$APACHE_ROOT/sites-enabled"; fi
+    while IFS= read -r conf; do
+      parse_server_names "$conf"
+    done < <(grep -RlE '^[[:space:]]*ServerName[[:space:]]' "$APACHE_ROOT" 2>/dev/null || true) \
+      | sort -u > "$VHOST_MAP"
+  fi
 fi
-success "Using Key Vault: ${KEYVAULT_NAME}"
 
-step "Matching certificate"
-# Match a certificate in the vault whose SANs cover one of the detected server names
-az_call keyvault certificate list --vault-name "${KEYVAULT_NAME}" --query "[].name" -o tsv || fail "az keyvault certificate list failed: ${AZ_STDERR}"
-mapfile -t VAULT_CERT_NAMES <<< "${AZ_OUTPUT}"
+if [[ ! -s "$VHOST_MAP" ]]; then
+  if [[ "$WEB_SERVER" == "apache" ]]; then
+    fail "No ServerName found in any enabled Apache vhost - add 'ServerName <fqdn>' to your site config and re-run"
+  fi
+  fail "No server_name found in any enabled nginx vhost - add 'server_name <fqdn>;' to your site config and re-run"
+fi
 
-CERT_NAME=""
-for server_name in "${SERVER_NAMES[@]}"; do
-  for vault_cert_name in "${VAULT_CERT_NAMES[@]}"; do
-    [ -n "${vault_cert_name}" ] || continue
-    sans=$(az keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${vault_cert_name}" --query "policy.x509CertificateProperties.subjectAlternativeNames.dnsNames" -o tsv 2>/dev/null || true)
-    if echo "${sans}" | grep -qx "${server_name}"; then
-      CERT_NAME="${vault_cert_name}"
-      break 2
-    fi
-  done
+# sites-enabled entries are symlinks into sites-available, so resolve to the real
+# file to avoid staging the same config twice under two different paths
+while IFS=$'\t' read -r vhost_name vhost_file; do
+  printf '%s\t%s\n' "$vhost_name" "$(realpath -m "$vhost_file" 2>/dev/null || echo "$vhost_file")"
+done < "$VHOST_MAP" | sort -u > "$VHOST_MAP.tmp"
+mv "$VHOST_MAP.tmp" "$VHOST_MAP"
+
+mapfile -t SERVER_NAMES < <(cut -f1 "$VHOST_MAP" | sort -u)
+success "Found ${#SERVER_NAMES[@]} server name(s)"
+for name in "${SERVER_NAMES[@]}"; do info "- $name"; done
+
+# ---- Locating Key Vault -----------------------------------------------------
+
+step "Locating Key Vault"
+if [[ -n "$KEY_VAULT_NAME" ]]; then
+  info "Using manual override"
+else
+  az_tsv "$TMP_DIR/vaults.txt" keyvault list --query '[].name' \
+    || fail "az keyvault list failed: $AZ_ERROR"
+  mapfile -t VAULTS < <(grep -v '^$' "$TMP_DIR/vaults.txt" || true)
+  (( ${#VAULTS[@]} > 0 )) || fail "No Key Vault accessible to this managed identity"
+  (( ${#VAULTS[@]} == 1 )) || fail "Expected exactly one accessible Key Vault, found ${#VAULTS[@]}: ${VAULTS[*]}"
+  KEY_VAULT_NAME="${VAULTS[0]}"
+fi
+success "Using Key Vault: $KEY_VAULT_NAME"
+
+# ---- Matching certificates --------------------------------------------------
+
+step "Matching certificates"
+declare -A CERT_BY_HOST CERT_FINGERPRINT CERT_EXPIRY CERT_DAYS
+MATCHED_HOSTS=()
+
+for host in "${SERVER_NAMES[@]}"; do
+  # Rejects anything that is not a plain hostname, so it can never escape $CERT_DIR
+  if [[ ! "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+    warn "Skipping malformed server name: $host"
+    continue
+  fi
+
+  # Key Vault names cannot contain dots, so site.example.com is stored as site-example-com
+  cert="${host//./-}"
+
+  # Reads only the public certificate (cer) - no secret access, no local changes
+  if ! az_tsv "$TMP_DIR/$cert.b64cer" keyvault certificate show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'cer'; then
+    case "$AZ_ERROR" in
+      *CERTIFICATE_VERIFY_FAILED*|*SSLError*|*"certificate verify failed"*)
+        # ARM reached the vault but the data plane did not, so this is name resolution
+        # or TLS interception in front of <vault>.vault.azure.net
+        info "$KEY_VAULT_NAME.vault.azure.net resolves to: $(getent hosts "$KEY_VAULT_NAME.vault.azure.net" | awk '{print $1}' | tr '\n' ' ')"
+        fail "TLS validation failed reaching $KEY_VAULT_NAME.vault.azure.net - check private endpoint DNS or an intercepting proxy: $AZ_ERROR" ;;
+      *Forbidden*|*AccessDenied*|*"not authorized"*|*"does not have"*)
+        fail "Access denied reading '$cert' - grant the identity get on certificates and secrets: $AZ_ERROR" ;;
+      *NotFound*|*"not found"*|*CertificateNotFound*)
+        warn "$host: no certificate named '$cert' in $KEY_VAULT_NAME"; continue ;;
+      *)
+        warn "$host: could not read '$cert': $AZ_ERROR"; continue ;;
+    esac
+  fi
+
+  if [[ ! -s "$TMP_DIR/$cert.b64cer" ]]; then
+    warn "$host: certificate '$cert' returned no public certificate (cer) data"
+    continue
+  fi
+
+  base64 -d < "$TMP_DIR/$cert.b64cer" > "$TMP_DIR/$cert.der" || fail "Could not decode certificate data for $cert"
+  openssl x509 -inform DER -in "$TMP_DIR/$cert.der" -out "$TMP_DIR/$cert.vault.pem" \
+    || fail "Could not parse certificate data for $cert"
+
+  CERT_FINGERPRINT["$cert"]="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
+  raw_expiry="$(openssl x509 -in "$TMP_DIR/$cert.vault.pem" -noout -enddate | cut -d= -f2)"
+  CERT_EXPIRY["$cert"]="$(date -d "$raw_expiry" '+%Y-%m-%d')"
+  CERT_DAYS["$cert"]=$(( ($(date -d "$raw_expiry" +%s) - $(date +%s)) / 86400 ))
+  (( ${CERT_DAYS[$cert]} >= 0 )) || warn "Certificate '$cert' has already expired"
+
+  CERT_BY_HOST["$host"]="$cert"
+  MATCHED_HOSTS+=("$host")
+  info "$host"
+  detail "$cert, expires ${CERT_EXPIRY[$cert]} (${CERT_DAYS[$cert]} days)"
 done
 
-if [ -z "${CERT_NAME}" ]; then
-  fail "No certificate found in ${KEYVAULT_NAME} matching: ${SERVER_NAMES[*]}"
-fi
+(( ${#MATCHED_HOSTS[@]} > 0 )) || fail "No certificate in $KEY_VAULT_NAME matches: ${SERVER_NAMES[*]}"
+success "Matched ${#MATCHED_HOSTS[@]} of ${#SERVER_NAMES[@]} host(s)"
 
-success "Found certificate: ${CERT_NAME}"
-
-CERT_DIR="/etc/ssl/${CERT_NAME}"
-CERT_FILE="${CERT_DIR}/fullchain.crt"
-KEY_FILE="${CERT_DIR}/privkey.key"
-if [ -d "${CERT_DIR}" ]; then
-  info "Local path: ${CERT_DIR}"
-else
-  info "Local path: ${CERT_DIR} (not yet created)"
-fi
-info "Certificate: ${CERT_FILE}"
-info "Private key: ${KEY_FILE}"
+# ---- Checking certificate status --------------------------------------------
 
 step "Checking certificate status"
-# Uses only the public certificate (cer) and metadata - no secret access, no local changes
-if ! VAULT_CER_B64=$(az keyvault certificate show --vault-name "${KEYVAULT_NAME}" --name "${CERT_NAME}" --query cer -o tsv); then
-  fail "Failed to read certificate '${CERT_NAME}' from Key Vault '${KEYVAULT_NAME}'"
+STALE_HOSTS=()
+
+for host in "${MATCHED_HOSTS[@]}"; do
+  cert="${CERT_BY_HOST[$host]}"
+  local_fingerprint=""
+  if [[ -f "$CERT_DIR/$host/fullchain.pem" ]]; then
+    local_fingerprint="$(openssl x509 -in "$CERT_DIR/$host/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2- || true)"
+  fi
+
+  if [[ "${CERT_FINGERPRINT[$cert]}" == "$local_fingerprint" ]]; then
+    info "$host: up to date"
+    # An up-to-date copy of a near-expiry certificate means the ACME issuance
+    # side has not renewed it yet, which this script cannot fix
+    (( ${CERT_DAYS[$cert]} > 14 )) \
+      || warn "$host expires in ${CERT_DAYS[$cert]} days - check the ACME renewal job"
+  else
+    STALE_HOSTS+=("$host")
+    info "$host: needs update"
+  fi
+done
+
+STALE_CERTS=()
+if (( ${#STALE_HOSTS[@]} > 0 )); then
+  mapfile -t STALE_CERTS < <(for host in "${STALE_HOSTS[@]}"; do echo "${CERT_BY_HOST[$host]}"; done | sort -u)
+fi
+success "${#STALE_HOSTS[@]} of ${#MATCHED_HOSTS[@]} host(s) need a new certificate"
+
+if (( DRY_RUN )); then
+  for host in "${STALE_HOSTS[@]:-}"; do
+    if [[ -n "$host" ]]; then
+      warn "Dry run: ${CERT_BY_HOST[$host]} would be installed to $CERT_DIR/$host"
+    fi
+  done
 fi
 
-if [ -z "${VAULT_CER_B64}" ]; then
-  fail "Certificate '${CERT_NAME}' returned no public certificate (cer) data"
+# ---- Downloading certificates -----------------------------------------------
+
+# OpenSSL 3 rejects the legacy RC2 encryption used by some PFX exports unless -legacy is passed
+pkcs12() { openssl pkcs12 "$@" -passin pass: 2>/dev/null || openssl pkcs12 "$@" -passin pass: -legacy; }
+# Strips OpenSSL's bag attribute preamble so nginx/Apache see clean PEM
+strip_pem() { awk '/^-----BEGIN/,/^-----END/' "$1"; }
+
+step "Downloading certificates"
+for cert in "${STALE_CERTS[@]:-}"; do
+  [[ -n "$cert" ]] || continue
+  (( DRY_RUN )) && continue
+  # Certificates are stored as PFX-encoded secrets alongside the certificate object
+  pfx_b64="$TMP_DIR/$cert.b64"
+  pfx_file="$TMP_DIR/$cert.pfx"
+  az_tsv "$pfx_b64" keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "$cert" --query 'value' \
+    || fail "Failed to read secret '$cert' from Key Vault '$KEY_VAULT_NAME': $AZ_ERROR"
+  [[ -s "$pfx_b64" ]] || fail "Secret '$cert' is empty"
+  base64 -d < "$pfx_b64" > "$pfx_file" || fail "Could not decode PFX data for $cert"
+  shred -u "$pfx_b64" 2>/dev/null || rm -f "$pfx_b64"
+
+  # -nokeys emits the leaf plus any chain certs in one pass, which is exactly a fullchain
+  pkcs12 -in "$pfx_file" -nokeys -out "$TMP_DIR/$cert.chainbag.pem" || fail "Could not extract certificate from PFX for $cert"
+  pkcs12 -in "$pfx_file" -nocerts -nodes -out "$TMP_DIR/$cert.rawkey.pem" || fail "Could not extract private key from PFX for $cert"
+  shred -u "$pfx_file" 2>/dev/null || rm -f "$pfx_file"
+
+  strip_pem "$TMP_DIR/$cert.chainbag.pem" > "$TMP_DIR/$cert.fullchain.pem"
+  strip_pem "$TMP_DIR/$cert.rawkey.pem" > "$TMP_DIR/$cert.privkey.pem"
+
+  new_fingerprint="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -fingerprint -sha256 | cut -d= -f2-)"
+  [[ "$new_fingerprint" == "${CERT_FINGERPRINT[$cert]}" ]] \
+    || fail "Downloaded $cert fingerprint ($new_fingerprint) does not match Key Vault (${CERT_FINGERPRINT[$cert]})"
+
+  # The key must belong to the certificate, or the reload will fail once the config is live.
+  # Comparing public keys rather than RSA moduli also covers EC certificates.
+  cert_pubkey="$(openssl x509 -in "$TMP_DIR/$cert.fullchain.pem" -noout -pubkey 2>/dev/null | openssl md5)"
+  key_pubkey="$(openssl pkey -in "$TMP_DIR/$cert.privkey.pem" -pubout 2>/dev/null | openssl md5)"
+  if [[ -z "$key_pubkey" || "$cert_pubkey" != "$key_pubkey" ]]; then
+    fail "Private key does not match the certificate for $cert"
+  fi
+
+  info "Downloaded and verified: $cert"
+done
+if (( DRY_RUN )); then
+  info "Dry run: skipped downloading ${#STALE_CERTS[@]} certificate(s)"
+else
+  success "All certificates downloaded and verified"
 fi
 
-if ! VAULT_CERT_INFO=$(echo "${VAULT_CER_B64}" | base64 -d | openssl x509 -inform DER -noout -enddate -fingerprint -sha256 2>&1); then
-  fail "Failed to parse certificate data: ${VAULT_CERT_INFO}"
+# ---- Installing certificates ------------------------------------------------
+
+step "Installing certificates"
+# Backups live outside the config tree: nginx includes sites-enabled/* unsuffixed,
+# so a backup beside the original would be loaded as a second config
+BACKUP_DIR="/var/backups/keyvault-acme-update/$(date +%Y%m%d%H%M%S)"
+declare -A BACKUP_OF
+
+backup_file() {
+  local path="$1" dest
+  [[ -f "$path" ]] || return 0
+  [[ -d "$BACKUP_DIR" ]] || install -d -m 0700 -o root -g root "$BACKUP_DIR"
+  dest="$BACKUP_DIR/${path//\//_}"
+  cp -p "$path" "$dest"
+  BACKUP_OF["$path"]="$dest"
+}
+
+for host in "${STALE_HOSTS[@]:-}"; do
+  [[ -n "$host" ]] || continue
+  (( DRY_RUN )) && continue
+  cert="${CERT_BY_HOST[$host]}"
+  target_dir="$CERT_DIR/$host"
+  install -d -m 0750 -o root -g root "$target_dir"
+
+  backup_file "$target_dir/fullchain.pem"
+  backup_file "$target_dir/privkey.pem"
+
+  install -m 0644 -o root -g root "$TMP_DIR/$cert.fullchain.pem" "$target_dir/fullchain.pem"
+  install -m 0600 -o root -g root "$TMP_DIR/$cert.privkey.pem" "$target_dir/privkey.pem"
+  info "$host"
+  detail "$target_dir"
+done
+if (( DRY_RUN )); then
+  info "Dry run: skipped installing certificates for ${#STALE_HOSTS[@]} host(s)"
+else
+  success "Installed certificates for ${#STALE_HOSTS[@]} host(s)"
 fi
 
-VAULT_EXPIRY_DATE=$(echo "${VAULT_CERT_INFO}" | grep -i '^notAfter=' | cut -d= -f2- || true)
-VAULT_FINGERPRINT=$(echo "${VAULT_CERT_INFO}" | grep -i '^sha256 Fingerprint=' | cut -d= -f2- || true)
+# ---- Validating site configuration ------------------------------------------
 
-if [ -z "${VAULT_EXPIRY_DATE}" ] || [ -z "${VAULT_FINGERPRINT}" ]; then
-  fail "Could not parse expiry/fingerprint from certificate data: ${VAULT_CERT_INFO}"
+step "Validating site configuration"
+# The rewrite is file-wide, so a file serving hosts that need different certificates
+# cannot be edited safely and is skipped rather than given one host's certificate
+declare -A FILE_HOST
+declare -A CONFLICT_FILES
+for host in "${MATCHED_HOSTS[@]}"; do
+  while IFS= read -r conf; do
+    [[ -n "$conf" ]] || continue
+    existing="${FILE_HOST[$conf]:-}"
+    if [[ -z "$existing" ]]; then
+      FILE_HOST["$conf"]="$host"
+    elif [[ "${CERT_BY_HOST[$existing]}" != "${CERT_BY_HOST[$host]}" ]]; then
+      CONFLICT_FILES["$conf"]=1
+      warn "$conf serves hosts needing different certificates ($existing, $host) - skipping, split it into one file per site"
+    fi
+  done < <(awk -F'\t' -v h="$host" '$1 == h { print $2 }' "$VHOST_MAP")
+done
+
+TARGET_FILES=()
+for conf in "${!FILE_HOST[@]}"; do
+  [[ -n "${CONFLICT_FILES[$conf]:-}" ]] || TARGET_FILES+=("$conf")
+done
+
+# Rewrites are staged in the temp dir first so nothing is touched until every file validates
+STAGE_DIR="$TMP_DIR/stage"
+mkdir -p "$STAGE_DIR"
+declare -A STAGED
+PENDING_FILES=()
+NO_TLS_FILES=()
+APPENDED_FILES=()
+STAGE_INDEX=0
+TLS_ACTION=""
+
+# Gives a config file a working TLS vhost: injects the certificate directives into an
+# existing TLS listener, or generates a whole vhost when the site is HTTP-only
+append_tls_block() {
+  local conf="$1" host="$2" fullchain="$3" privkey="$4" staged="$5" root=""
+
+  if [[ "$WEB_SERVER" == "nginx" ]]; then
+    if grep -qE '^[[:space:]]*listen[[:space:]].*ssl' "$conf"; then
+      # Inserted after the last of the consecutive listen directives, so an
+      # IPv4/IPv6 pair is not split apart
+      awk -v fc="$fullchain" -v pk="$privkey" '
+        { lines[NR] = $0 }
+        END {
+          for (i = 1; i <= NR; i++) {
+            if (!at && lines[i] ~ /^[[:space:]]*listen[[:space:]]/ && lines[i] ~ /ssl/) {
+              j = i
+              while (j + 1 <= NR && lines[j + 1] ~ /^[[:space:]]*listen[[:space:]]/) j++
+              at = j
+            }
+          }
+          for (i = 1; i <= NR; i++) {
+            print lines[i]
+            if (i == at) {
+              match(lines[i], /^[[:space:]]*/)
+              indent = substr(lines[i], 1, RLENGTH)
+              print indent "ssl_certificate " fc ";"
+              print indent "ssl_certificate_key " pk ";"
+            }
+          }
+        }
+      ' "$conf" > "$staged"
+      TLS_ACTION="certificate directives added to existing ssl listener"
+      return 0
+    fi
+
+    root="$(awk '/^[[:space:]]*root[[:space:]]/ { sub(/;.*$/, ""); sub(/^[[:space:]]*root[[:space:]]+/, ""); print; exit }' "$conf")"
+    [[ -n "$root" ]] || root="/var/www/html"
+
+    cat "$conf" > "$staged"
+    cat >> "$staged" <<EOF
+
+# TLS vhost generated by Invoke-KeyVaultCertRenewal.sh
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $host;
+
+    ssl_certificate $fullchain;
+    ssl_certificate_key $privkey;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    root $root;
+    index index.html index.htm index.nginx-debian.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    TLS_ACTION="TLS vhost generated"
+  else
+    if grep -qiE '<VirtualHost[^>]*:443' "$conf"; then
+      awk -v fc="$fullchain" -v pk="$privkey" '
+        { print }
+        !done && /<VirtualHost[^>]*:443/ {
+          match($0, /^[[:space:]]*/)
+          indent = substr($0, 1, RLENGTH) "    "
+          print indent "SSLEngine on"
+          print indent "SSLCertificateFile " fc
+          print indent "SSLCertificateKeyFile " pk
+          done = 1
+        }
+      ' "$conf" > "$staged"
+      TLS_ACTION="certificate directives added to existing :443 vhost"
+      return 0
+    fi
+
+    root="$(awk '/^[[:space:]]*DocumentRoot[[:space:]]/ { sub(/^[[:space:]]*DocumentRoot[[:space:]]+/, ""); gsub(/"/, ""); print; exit }' "$conf")"
+    [[ -n "$root" ]] || root="/var/www/html"
+
+    cat "$conf" > "$staged"
+    cat >> "$staged" <<EOF
+
+# TLS vhost generated by Invoke-KeyVaultCertRenewal.sh
+<VirtualHost *:443>
+    ServerName $host
+    DocumentRoot $root
+
+    SSLEngine on
+    SSLCertificateFile $fullchain
+    SSLCertificateKeyFile $privkey
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+</VirtualHost>
+EOF
+    TLS_ACTION="TLS vhost generated"
+  fi
+  return 0
+}
+
+for conf in "${TARGET_FILES[@]}"; do
+  if [[ ! -f "$conf" ]]; then warn "Config file not found: $conf"; continue; fi
+
+  cert_host="${FILE_HOST[$conf]}"
+  fullchain="$CERT_DIR/$cert_host/fullchain.pem"
+  privkey="$CERT_DIR/$cert_host/privkey.pem"
+  staged="$STAGE_DIR/$((STAGE_INDEX++)).conf"
+
+  if ! grep -qiE '^[[:space:]]*(ssl_certificate|SSLCertificateFile)[[:space:]]' "$conf"; then
+    if (( ! APPEND_TLS )); then
+      NO_TLS_FILES+=("$conf")
+      continue
+    fi
+    append_tls_block "$conf" "$cert_host" "$fullchain" "$privkey" "$staged"
+    STAGED["$conf"]="$staged"
+    PENDING_FILES+=("$conf")
+    APPENDED_FILES+=("$conf")
+    info "$conf"
+    detail "$TLS_ACTION"
+    continue
+  fi
+
+  if [[ "$WEB_SERVER" == "nginx" ]]; then
+    sed -E \
+      -e "s#^([[:space:]]*)ssl_certificate[[:space:]]+[^;]+;#\1ssl_certificate $fullchain;#" \
+      -e "s#^([[:space:]]*)ssl_certificate_key[[:space:]]+[^;]+;#\1ssl_certificate_key $privkey;#" \
+      "$conf" > "$staged"
+  else
+    sed -E \
+      -e "s#^([[:space:]]*)SSLCertificateFile[[:space:]]+.*#\1SSLCertificateFile $fullchain#I" \
+      -e "s#^([[:space:]]*)SSLCertificateKeyFile[[:space:]]+.*#\1SSLCertificateKeyFile $privkey#I" \
+      -e "/^[[:space:]]*SSLCertificateChainFile[[:space:]]/Id" \
+      "$conf" > "$staged"
+  fi
+
+  if cmp -s "$conf" "$staged"; then
+    info "$conf"
+    detail "already current"
+  else
+    STAGED["$conf"]="$staged"
+    PENDING_FILES+=("$conf")
+    info "$conf"
+    detail "certificate paths to be updated"
+  fi
+done
+
+if (( ${#NO_TLS_FILES[@]} > 0 )); then
+  warn "${#NO_TLS_FILES[@]} vhost(s) left unchanged - add ssl_certificate/ssl_certificate_key pointing at $CERT_DIR/<fqdn>/:"
+  for conf in "${NO_TLS_FILES[@]}"; do warn "  $conf (${FILE_HOST[$conf]})"; done
 fi
 
-EXPIRY_EPOCH=$(date -d "${VAULT_EXPIRY_DATE}" +%s)
-NOW_EPOCH=$(date +%s)
-EXPIRY_DAYS=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-info "Expires: ${VAULT_EXPIRY_DATE} (${EXPIRY_DAYS} days remaining)"
+success "Validated ${#TARGET_FILES[@]} config file(s), ${#PENDING_FILES[@]} to update (${#APPENDED_FILES[@]} new TLS vhost(s))"
 
-LOCAL_FINGERPRINT=""
-if [ -f "${CERT_FILE}" ]; then
-  LOCAL_FINGERPRINT=$(openssl x509 -in "${CERT_FILE}" -noout -fingerprint -sha256 | grep -i '^sha256 Fingerprint=' | cut -d= -f2- || true)
-fi
-
-if [ "${VAULT_FINGERPRINT}" = "${LOCAL_FINGERPRINT}" ]; then
-  echo ""
-  success "Certificate ${CERT_NAME} is already up to date, nothing to do."
+if (( DRY_RUN )); then
+  step "Done"
+  success "Dry run complete, nothing was changed"
   exit 0
 fi
 
-mkdir -p "${CERT_DIR}"
-chmod 750 "${CERT_DIR}"
-
-TMP_DIR=$(mktemp -d)
-
-TMP_PFX="${TMP_DIR}/cert.pfx"
-TMP_CERT="${TMP_DIR}/fullchain.pem"
-TMP_KEY="${TMP_DIR}/privkey.pem"
-
-step "Downloading certificate"
-# Certificates are stored as PFX-encoded secrets alongside the certificate object
-az_call keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${CERT_NAME}" --query value -o tsv || fail "az keyvault secret show failed: ${AZ_STDERR}"
-echo "${AZ_OUTPUT}" | base64 -d > "${TMP_PFX}"
-unset AZ_OUTPUT
-
-openssl pkcs12 -in "${TMP_PFX}" -nokeys -passin pass: -out "${TMP_CERT}"
-openssl pkcs12 -in "${TMP_PFX}" -nocerts -nodes -passin pass: -out "${TMP_KEY}"
-chmod 600 "${TMP_KEY}"
-success "Certificate downloaded and decoded"
-
-# Integrity check - make sure the downloaded cert and key are actually a matching pair
-CERT_MODULUS=$(openssl x509 -in "${TMP_CERT}" -noout -modulus | openssl md5)
-KEY_MODULUS=$(openssl rsa -in "${TMP_KEY}" -noout -modulus 2>/dev/null | openssl md5)
-if [ "${CERT_MODULUS}" != "${KEY_MODULUS}" ]; then
-  fail "Downloaded certificate and private key do not match, aborting install"
+if (( ${#STALE_HOSTS[@]} == 0 && ${#PENDING_FILES[@]} == 0 )); then
+  step "Done"
+  success "All certificates and site configuration are already up to date, nothing to do."
+  exit 0
 fi
 
-step "Installing certificate"
-# Keep a timestamped backup of the previous cert/key so a bad renewal can be rolled back
-if [ -f "${CERT_FILE}" ] || [ -f "${KEY_FILE}" ]; then
-  BACKUP_DIR="${CERT_DIR}/backup-$(date '+%Y%m%d%H%M%S')"
-  mkdir -p "${BACKUP_DIR}"
-  chmod 700 "${BACKUP_DIR}"
-  [ -f "${CERT_FILE}" ] && cp -p "${CERT_FILE}" "${BACKUP_DIR}/" || true
-  [ -f "${KEY_FILE}" ] && cp -p "${KEY_FILE}" "${BACKUP_DIR}/" || true
-  info "Previous certificate backed up to ${BACKUP_DIR}"
+# ---- Applying site configuration --------------------------------------------
+
+step "Applying site configuration"
+SSL_MODULE_ENABLED=0
+rollback() {
+  warn "Rolling back configuration and certificates"
+  if (( SSL_MODULE_ENABLED )); then a2dismod ssl >>"$LOG_FILE" 2>&1 || true; fi
+  if (( ${#BACKUP_OF[@]} > 0 )); then
+    for path in "${!BACKUP_OF[@]}"; do
+      cp -p "${BACKUP_OF[$path]}" "$path"
+    done
+  fi
+}
+
+for conf in "${PENDING_FILES[@]:-}"; do
+  [[ -n "$conf" ]] || continue
+  backup_file "$conf"
+  cat "${STAGED[$conf]}" > "$conf"
+  info "Applied: $conf"
+done
+
+if (( ${#PENDING_FILES[@]} == 0 )); then
+  info "No config changes required, certificate files replaced in place"
 fi
 
-install -m 644 "${TMP_CERT}" "${CERT_FILE}"
-install -m 600 "${TMP_KEY}" "${KEY_FILE}"
-info "Certificate: ${CERT_FILE}"
-info "Private key: ${KEY_FILE}"
-success "Certificate installed"
+# A generated <VirtualHost *:443> is inert without mod_ssl, and apachectl -t
+# still passes without it, so the module has to be enabled explicitly
+if [[ "$WEB_SERVER" == "apache" ]] && (( ${#APPENDED_FILES[@]} > 0 )); then
+  if "$APACHE_BIN" -M 2>/dev/null | grep -q ssl_module; then
+    info "mod_ssl already enabled"
+  elif command -v a2enmod >/dev/null 2>&1; then
+    a2enmod ssl >>"$LOG_FILE" 2>&1 || { rollback; fail "a2enmod ssl failed, see $LOG_FILE"; }
+    SSL_MODULE_ENABLED=1
+    info "Enabled mod_ssl (also adds Listen 443 via ports.conf)"
+  else
+    rollback
+    fail "mod_ssl is not loaded and a2enmod is unavailable - install it (e.g. 'dnf install mod_ssl') and re-run"
+  fi
 
-step "Reloading ${WEBSERVER}"
-if [ "${WEBSERVER}" = "nginx" ]; then
-  systemctl reload nginx
+  apache_root=$([[ -d /etc/apache2 ]] && echo /etc/apache2 || echo /etc/httpd)
+  grep -RqE '^[[:space:]]*Listen[[:space:]]+([0-9.]+:)?443' "$apache_root" 2>/dev/null \
+    || warn "No 'Listen 443' directive found under $apache_root - the new TLS vhost will not bind"
+fi
+
+# The config test runs against the live tree, so it can only happen once changes are applied
+if [[ "$WEB_SERVER" == "nginx" ]]; then
+  nginx -t >"$TMP_DIR/posttest.txt" 2>&1 && CONFIG_TEST_OK=1 || CONFIG_TEST_OK=0
 else
-  systemctl reload apache2 2>/dev/null || systemctl reload httpd
+  "$APACHE_BIN" -t >"$TMP_DIR/posttest.txt" 2>&1 && CONFIG_TEST_OK=1 || CONFIG_TEST_OK=0
 fi
-success "${WEBSERVER} reloaded"
+cat "$TMP_DIR/posttest.txt" >> "$LOG_FILE"
+
+if (( ! CONFIG_TEST_OK )); then
+  if (( CONFIG_OK )); then
+    rollback
+    fail "$WEB_SERVER config test failed after applying changes, rolled back: $(grep -m1 -iE 'emerg|error|syntax' "$TMP_DIR/posttest.txt" || true)"
+  fi
+  # The config was already failing before this run, so the new certificates are
+  # kept and only the reload is skipped
+  warn "Certificates installed, but $WEB_SERVER config was already invalid before this run"
+  warn "Fix the config and run 'systemctl reload $WEB_SERVER' to activate them"
+  step "Done"
+  exit 1
+fi
+success "Configuration applied and config test passed"
+
+# ---- Reloading web server ---------------------------------------------------
+
+step "Reloading $WEB_SERVER"
+if [[ "$WEB_SERVER" == "nginx" ]]; then
+  WEB_SERVICE=nginx
+else
+  WEB_SERVICE=$(systemctl list-units --type=service --all --no-legend 'apache2.service' 'httpd.service' 2>/dev/null | awk '{print $1}' | head -n1)
+  WEB_SERVICE="${WEB_SERVICE:-apache2}"
+fi
+
+# A stopped server is not a failure - the certificates are in place and will be
+# picked up whenever it is started, so there is nothing to roll back
+if ! systemctl is-active --quiet "$WEB_SERVICE"; then
+  warn "$WEB_SERVICE is not running, skipping reload - certificates are installed and will apply on next start"
+elif systemctl reload "$WEB_SERVICE" >>"$LOG_FILE" 2>&1; then
+  success "$WEB_SERVER reloaded"
+else
+  rollback
+  fail "$WEB_SERVER reload failed, see $LOG_FILE"
+fi
+
+# Config backups are kept for post-mortem, but a superseded private key must not
+# linger on disk once the replacement is confirmed live
+if (( ${#BACKUP_OF[@]} > 0 )); then
+  for path in "${!BACKUP_OF[@]}"; do
+    case "$path" in
+      *privkey.pem) shred -u "${BACKUP_OF[$path]}" 2>/dev/null || rm -f "${BACKUP_OF[$path]}" ;;
+    esac
+  done
+  info "Previous files backed up to $BACKUP_DIR"
+fi
+find /var/backups/keyvault-acme-update -mindepth 1 -maxdepth 1 -type d -mtime +30 \
+  -exec rm -rf {} + 2>/dev/null || true
+
+# ---- Summary ----------------------------------------------------------------
 
 step "Done"
-success "Certificate ${CERT_NAME} installed and ${WEBSERVER} reloaded"
+info "Key Vault   $KEY_VAULT_NAME"
+info "Web server  $WEB_SERVER"
+info "Log         $LOG_FILE"
+for host in "${MATCHED_HOSTS[@]}"; do
+  cert="${CERT_BY_HOST[$host]}"
+  echo
+  info "$host"
+  detail "certificate  $cert"
+  detail "installed    $CERT_DIR/$host"
+  detail "expires      ${CERT_EXPIRY[$cert]} (${CERT_DAYS[$cert]} days)"
+done
+echo
+success "Updated ${#STALE_HOSTS[@]} host(s) across ${#TARGET_FILES[@]} site config(s), $WEB_SERVER reloaded"

@@ -186,7 +186,7 @@ az functionapp config appsettings list -g <resource-group> -n <function-app-name
 - DNS role assignment modules support cross-subscription scopes via explicit subscription parameters
 - The baseline is tuned for Azure public cloud and Acmebot v5 behavior
 - Key Vault uses Access Policies (not RBAC) to preserve compatibility with Application Gateway certificate integration
-- Key Vault soft delete and purge protection are enabled with a 90-day retention period; purge protection cannot be disabled after activation
+- Key Vault soft delete is enabled with a 90-day retention period; purge protection is intentionally left disabled so certificates can be force-purged and re-issued under the same name without waiting out the retention window. Once purge protection is enabled it cannot be turned off again, so weigh this trade-off before flipping it on for a given vault.
 - NSG is only created when `enableCreateVirtualNetwork = true`; when using an existing VNet, NSG management is assumed to be handled by the existing network
 - `dependsOn` helpers are intentionally retained for readability and the linter rule is disabled in `infra/bicepconfig.json`
 
