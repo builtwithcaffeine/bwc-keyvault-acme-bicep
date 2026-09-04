@@ -456,7 +456,7 @@ module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main
 // Create User Managed Identity
 module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.6.0' = [
   for userManagedIdentityName in userManagedIdentityArray: {
-    name: 'create-umi-${userManagedIdentityName}-${locationShortCode}'
+    name: 'create-${userManagedIdentityName}-${locationShortCode}'
     scope: resourceGroup(resourceGroupName)
     params: {
       name: userManagedIdentityName
@@ -619,7 +619,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
 }
 
 module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' = {
-  name: 'create-storage-account'
+  name: 'create-storage-account-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: storageAccountName
@@ -796,7 +796,7 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
 }
 
 module createApplicationInsights 'br/public:avm/res/insights/component:0.8.0' = {
-  name: 'create-application-insights'
+  name: 'create-application-insights-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: applicationInsightsName
