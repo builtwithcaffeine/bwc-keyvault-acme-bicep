@@ -11,23 +11,43 @@ param deployedBy = 'labadmin@builtwithcaffeine.cloud'
 var subscriptionId = 'ecba0e28-5657-4e2b-a5f5-9c3873893d3b'
 
 //
-// Azure Existing Resource
-param sharedResourceGroupName = 'rg-bwc-dns-prod-weu'
-
 // Azure Network
-param enableCreatePrivateDnsZones = true
-param enableCreateVirtualNetwork = true
+//
+// networkTopology selects one of three supported configurations:
+//
+//   standalone - Creates a Virtual Network and its own private DNS zones. Self-contained,
+//                no hub connectivity. Only the spoke* parameters below are used.
+//
+//   hubSpoke   - Creates a Virtual Network and peers it (both directions) to an existing
+//                shared hub. Uses the hub-hosted private DNS zones. Requires the spoke*,
+//                sharedHub* and privateDnsZone* parameters.
+//
+//   existing   - Brings your own Virtual Network and subnets, and uses existing private DNS
+//                zones. Requires the existing* and privateDnsZone* parameters.
+//
+param networkTopology = 'hubSpoke'
 
-// Azure Network - New Virtual Network
-param virtualNetworkAddressPrefix = '10.0.0.0/24' // 254 Addresses
-param virtualNetworkSubnetShared = '10.0.0.0/28' // 16 Addresses
-param virtualNetworkSubnetAppService = '10.0.0.32/27' // 32 Addresses
+// Azure Network - Private DNS Zones [hubSpoke, existing]
+param privateDnsZoneSubscriptionId = subscriptionId
+param privateDnsZoneResourceGroupName = 'rg-bwc-shared-hub-prod-weu'
+param enablePrivateDnsZoneVnetLink = true
 
-// Azure Network - Existing Virtual Network
-param existingVirtualNetworkResourceGroup = 'rg-bwc-dns-prod-weu'
+// Azure Network - Spoke Virtual Network [standalone, hubSpoke]
+param spokeVirtualNetworkAddressPrefix = '10.1.0.0/24' // 254 Addresses
+param spokeSubnetPrivateEndpointPrefix = '10.1.0.0/28' // 16 Addresses
+param spokeSubnetAppServicePrefix = '10.1.0.32/27' // 32 Addresses
+
+// Azure Network - Shared Hub [hubSpoke]
+param sharedHubSubscriptionId = subscriptionId
+param sharedHubResourceGroupName = 'rg-bwc-shared-hub-prod-weu'
+param sharedHubVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
+
+// Azure Network - Existing Virtual Network [existing]
+param existingSubscriptionId = subscriptionId
+param existingResourceGroupName = 'rg-bwc-shared-hub-prod-weu'
 param existingVirtualNetworkName = 'vnet-bwc-shared-hub-prod-weu'
-param existingVirtualNetworkSubnetSharedName = 'snet-shared-hub-prod-weu'
-param existingVirtualNetworkSubnetAppServiceName = 'snet-appservice-hub-prod-weu'
+param existingSubnetPrivateEndpointName = 'snet-shared-hub-prod-weu'
+param existingSubnetAppServiceName = 'snet-appservice-hub-prod-weu'
 
 //
 // Azure DNS Zones

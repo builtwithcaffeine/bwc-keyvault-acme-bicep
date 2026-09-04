@@ -39,73 +39,113 @@ var resourceTags = union({
 //
 // Parameters [Created Resources]
 
-// Resource Group Name
+@description('Resource Group name using the CAF naming convention')
 var resourceGroupName = 'rg-x-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
+@description('Network Security Group name using the CAF naming convention')
 var networkSecurityGroupName = 'nsg-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Virtual Network Name
+@description('Virtual Network name using the CAF naming convention')
 var virtualNetworkName = 'vnet-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// User Managed Identity Name
+@description('User Assigned Managed Identity names: [0] Acmebot runtime identity, [1] Key Vault ACME cert-manager identity')
 var userManagedIdentityArray = [
   'id-${customerName}-kvacme-${environmentType}-${locationShortCode}'
   'id-${customerName}-kvacme-cert-manager-${environmentType}-${locationShortCode}'
 ]
 
-// Key Vault Name
+@description('Key Vault name using the CAF naming convention')
 var keyvaultName = 'kv-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Storage Account Name
+@description('Storage Account name using the CAF naming convention')
 var storageAccountName = 'st${customerName}kvacme${environmentType}${locationShortCode}'
 
-// Log Analytics Workspace Name
+@description('Log Analytics Workspace name using the CAF naming convention')
 var logAnalyticsWorkspaceName = 'log-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Application Insights Name
+@description('Application Insights name using the CAF naming convention')
 var applicationInsightsName = 'appi-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Application Service Plan Name
+@description('App Service Plan name using the CAF naming convention')
 var appServicePlanName = 'asp-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
-// Function App Name
+@description('Function App name using the CAF naming convention')
 var functionAppName = 'func-${customerName}-kvacme-${environmentType}-${locationShortCode}'
 
 //
 // Parameters [Existing Resources]
 // Imported from parameters file or passed in at deployment time
 
-@description('Shared Hub - Resource Group Name')
-param sharedResourceGroupName string
+// Azure Network
 
-// Azure Virtual Network
+@description('Network topology: standalone (self-contained VNet + private DNS zones), hubSpoke (new spoke VNet peered to a shared hub, using hub-hosted private DNS zones), or existing (bring your own VNet and subnets).')
+@allowed([
+  'standalone'
+  'hubSpoke'
+  'existing'
+])
+param networkTopology string
 
-@description('Enable Create Virtual Network Module')
-param enableCreateVirtualNetwork bool
+var deployVirtualNetwork = networkTopology != 'existing'
+var deployPrivateDnsZones = networkTopology == 'standalone'
+var peerToSharedHub = networkTopology == 'hubSpoke'
 
-@description('Enable Create Private Dns Zones')
-param enableCreatePrivateDnsZones bool
+// Topologies that do not consume these leave them empty, but the scope expressions are still compiled
+var sharedHubResourceGroupScope = empty(sharedHubResourceGroupName) ? resourceGroupName : sharedHubResourceGroupName
+var existingResourceGroupScope = empty(existingResourceGroupName) ? resourceGroupName : existingResourceGroupName
+var privateDnsZoneResourceGroupScope = empty(privateDnsZoneResourceGroupName)
+  ? resourceGroupName
+  : privateDnsZoneResourceGroupName
 
-@description('Virtual Network Address Prefix')
-param virtualNetworkAddressPrefix string
+// Azure Network - Spoke Virtual Network [standalone, hubSpoke]
 
-@description('Virtual Network Subnet - Shared Resources')
-param virtualNetworkSubnetShared string
+@description('Address prefix for the Virtual Network created by the standalone and hubSpoke topologies.')
+param spokeVirtualNetworkAddressPrefix string = ''
 
-@description('Virtual Network Subnet - App Service')
-param virtualNetworkSubnetAppService string
+@description('Address prefix for the private endpoint subnet. Must accommodate six private endpoints.')
+param spokeSubnetPrivateEndpointPrefix string = ''
 
-@description('Existing Virtual Network Resource Group Name')
-param existingVirtualNetworkResourceGroup string
+@description('Address prefix for the App Service subnet. Must be at least a /27 for Flex Consumption.')
+param spokeSubnetAppServicePrefix string = ''
 
-@description('Existing Virtual Network Name')
-param existingVirtualNetworkName string
+// Azure Network - Shared Hub [hubSpoke]
 
-@description('Existing Virtual Network Subnet - Shared Resources')
-param existingVirtualNetworkSubnetSharedName string
+@description('Subscription Id hosting the shared hub Virtual Network. Defaults to the deployment subscription.')
+param sharedHubSubscriptionId string = subscription().subscriptionId
 
-@description('Existing Virtual Network Subnet - App Service')
-param existingVirtualNetworkSubnetAppServiceName string
+@description('Resource Group hosting the shared hub Virtual Network.')
+param sharedHubResourceGroupName string = ''
+
+@description('Name of the shared hub Virtual Network to peer the spoke into.')
+param sharedHubVirtualNetworkName string = ''
+
+// Azure Network - Existing Virtual Network [existing]
+
+@description('Subscription Id hosting the existing Virtual Network. Defaults to the deployment subscription.')
+param existingSubscriptionId string = subscription().subscriptionId
+
+@description('Resource Group hosting the existing Virtual Network.')
+param existingResourceGroupName string = ''
+
+@description('Name of the existing Virtual Network.')
+param existingVirtualNetworkName string = ''
+
+@description('Name of the existing subnet used for private endpoints.')
+param existingSubnetPrivateEndpointName string = ''
+
+@description('Name of the existing subnet used for App Service VNet integration.')
+param existingSubnetAppServiceName string = ''
+
+// Azure Network - Private DNS Zones [hubSpoke, existing]
+
+@description('Subscription Id hosting the existing private DNS zones. Defaults to the deployment subscription.')
+param privateDnsZoneSubscriptionId string = subscription().subscriptionId
+
+@description('Resource Group hosting the existing private DNS zones.')
+param privateDnsZoneResourceGroupName string = ''
+
+@description('Link the existing private DNS zones to the Virtual Network. Creating a link that already exists is a no-op.')
+param enablePrivateDnsZoneVnetLink bool = true
 
 // Azure Key Vault
 
@@ -166,10 +206,12 @@ var acmeKeyVaultUrlBase = 'https://${keyvaultName}${environment().suffixes.keyva
 @minLength(1)
 param acmebotReleaseTag string = 'latest'
 
+@description('acmebotReleaseTag normalized to a "v"-prefixed GitHub release tag')
 var normalizedAcmebotReleaseTag = startsWith(toLower(acmebotReleaseTag), 'v')
   ? acmebotReleaseTag
   : 'v${acmebotReleaseTag}'
 
+@description('GitHub release download URL for the Acmebot package, resolved to "latest" or a pinned release tag')
 #disable-next-line no-hardcoded-env-urls
 var acmebotPackageUri = toLower(acmebotReleaseTag) == 'latest'
   ? 'https://github.com/polymind-inc/acmebot/releases/latest/download/acmebot.zip'
@@ -246,12 +288,18 @@ param gitHubFederationSubjectType string = 'branch'
 @description('Branch, environment, or tag name used to build the federation subject (ignored for pull_request)')
 param gitHubFederationSubjectValue string = 'main'
 
+@description('gitHubRepository split into [owner, repo] parts')
 var gitHubRepositoryParts = split(gitHubRepository, '/')
+
+@description('True when both immutable GitHub owner/repo Ids are supplied, enabling the rename-proof subject format')
 var useImmutableGitHubSubject = !empty(gitHubRepositoryOwnerId) && !empty(gitHubRepositoryId)
+
+@description('The owner/repo segment of the federated credential subject, using immutable Ids when available')
 var gitHubFederationRepository = useImmutableGitHubSubject
   ? '${gitHubRepositoryParts[0]}@${gitHubRepositoryOwnerId}/${gitHubRepositoryParts[1]}@${gitHubRepositoryId}'
   : gitHubRepository
 
+@description('Fully qualified federated credential subject, built from the selected GitHub Actions subject type')
 var gitHubFederationSubject = gitHubFederationSubjectType == 'branch'
   ? 'repo:${gitHubFederationRepository}:ref:refs/heads/${gitHubFederationSubjectValue}'
   : gitHubFederationSubjectType == 'tag'
@@ -273,54 +321,63 @@ var privateDnsZonesArray = [
 //
 // Azure Resource - [Existing]
 
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-09-01' existing = if (!enableCreateVirtualNetwork) {
-  scope: resourceGroup(existingVirtualNetworkResourceGroup)
+@description('The shared hub Virtual Network, used by the hubSpoke topology for peering')
+resource existingSharedHubVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (peerToSharedHub) {
+  scope: resourceGroup(sharedHubSubscriptionId, sharedHubResourceGroupScope)
+  name: sharedHubVirtualNetworkName
+}
+
+@description('The existing Virtual Network, used by the existing topology')
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (!deployVirtualNetwork) {
+  scope: resourceGroup(existingSubscriptionId, existingResourceGroupScope)
   name: existingVirtualNetworkName
 }
 
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-09-01' existing = if (!enableCreateVirtualNetwork) {
+@description('The existing private endpoint subnet, used by the existing topology')
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
-  name: existingVirtualNetworkSubnetSharedName
+  name: existingSubnetPrivateEndpointName
 }
 
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-09-01' existing = if (!enableCreateVirtualNetwork) {
+@description('The existing App Service subnet, used by the existing topology')
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
-  name: existingVirtualNetworkSubnetAppServiceName
+  name: existingSubnetAppServiceName
 }
 
 // Private End Point - Key Vault
-resource privateDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneKeyVault 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[0]
 }
 
 // Private End Point - Storage Account (Blob)
-resource privateDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneStorageBlob 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[1]
 }
 
 // Private End Point - Storage Account (File)
-resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneStorageFile 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[2]
 }
 
 // Private End Point - Storage Account (Table)
-resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneStorageTable 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[3]
 }
 
 // Private End Point - Storage Account (Queue)
-resource privateDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneStorageQueue 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[4]
 }
 
 // Private End Point - Web Site
-resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!enableCreatePrivateDnsZones) {
-  scope: resourceGroup(sharedResourceGroupName)
+resource privateDnsZoneAzureSites 'Microsoft.Network/privateDnsZones@2024-06-01' existing = if (!deployPrivateDnsZones) {
+  scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
   name: privateDnsZonesArray[5]
 }
 
@@ -417,6 +474,7 @@ module createAppRegistration '../modules/microsoft-graph/applications/main.bicep
 }
 
 module createFederatedCredential '../modules/microsoft-graph/applications/federatedIdentityCredentials/main.bicep' = {
+  // Federated credential letting the Acmebot managed identity sign in as the App Registration (workload identity federation)
   name: 'create-entra-federated-credential-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -441,8 +499,6 @@ module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main
   scope: resourceGroup(resourceGroupName)
   params: {
     appId: createAppRegistration.outputs.applicationId
-    // displayName intentionally omitted - Graph requires it to exactly match the linked
-    // application's displayName, so it inherits from createAppRegistration automatically.
     homepage: 'https://${functionAppName}.azurewebsites.net'
     accountEnabled: true
     appRoleAssignmentRequired: true
@@ -469,7 +525,19 @@ module createUserManagedIdentity 'br/public:avm/res/managed-identity/user-assign
   }
 ]
 
-
+// Grants the Acmebot managed identity Contributor over the resource group
+module createContributorRbacAssignment 'br/public:avm/res/authorization/role-assignment/rg-scope:0.1.1' = {
+  name: 'create-rbac-role-assignment-${locationShortCode}'
+  scope: resourceGroup(resourceGroupName)
+  params: {
+    principalId: createUserManagedIdentity[0].outputs.principalId
+    roleDefinitionIdOrName: '/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c' // Contributor
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    createUserManagedIdentity
+  ]
+}
 
 // GitHub Actions OIDC federation on the Acmebot managed identity - lets workflows (e.g. update-acmebot-function-app.yml) authenticate without a client secret
 module createGitHubActionsFederatedCredential '../modules/identity/federatedIdentityCredential/main.bicep' = if (enableGitHubActionsFederation) {
@@ -486,8 +554,8 @@ module createGitHubActionsFederatedCredential '../modules/identity/federatedIden
   ]
 }
 
-
-module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (enableCreateVirtualNetwork) {
+// Create Network Security Group (associated to both subnets below)
+module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (deployVirtualNetwork) {
   name: 'create-network-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -500,28 +568,43 @@ module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-gr
   ]
 }
 
-module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = if (enableCreateVirtualNetwork) {
+// Create Virtual Network with private endpoint and App Service subnets, peered to the shared hub under the hubSpoke topology
+module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' = if (deployVirtualNetwork) {
   name: 'create-virtual-network-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
     name: virtualNetworkName
     location: location
     addressPrefixes: [
-      virtualNetworkAddressPrefix
+      spokeVirtualNetworkAddressPrefix
     ]
     subnets: [
       {
         name: 'snet-shared-resources'
-        addressPrefix: virtualNetworkSubnetShared
+        addressPrefix: spokeSubnetPrivateEndpointPrefix
         networkSecurityGroupResourceId: createNetworkSecurityGroup!.outputs.resourceId
       }
       {
         name: 'snet-kvacme-appservice'
-        addressPrefix: virtualNetworkSubnetAppService
+        addressPrefix: spokeSubnetAppServicePrefix
         networkSecurityGroupResourceId: createNetworkSecurityGroup!.outputs.resourceId
         delegation: 'Microsoft.App/environments'
       }
     ]
+    peerings: peerToSharedHub
+      ? [
+          {
+            name: 'peer-to-${sharedHubVirtualNetworkName}'
+            remotePeeringName: 'peer-to-${virtualNetworkName}'
+            remoteVirtualNetworkResourceId: existingSharedHubVirtualNetwork.id
+            remotePeeringEnabled: true
+            allowVirtualNetworkAccess: true
+            allowForwardedTraffic: true
+            allowGatewayTransit: false
+            useRemoteGateways: false
+          }
+        ]
+      : []
     tags: resourceTags
   }
   dependsOn: [
@@ -529,8 +612,9 @@ module createVirtualNetwork 'br/public:avm/res/network/virtual-network:0.10.2' =
   ]
 }
 
+// Create Private DNS Zones for each private endpoint (Key Vault, Storage x4, Web Site)
 module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' = [
-  for privateDnsZone in privateDnsZonesArray: if (enableCreatePrivateDnsZones) {
+  for privateDnsZone in privateDnsZonesArray: if (deployPrivateDnsZones) {
     name: 'create-${replace(privateDnsZone, '.', '-')}-${locationShortCode}'
     scope: resourceGroup(resourceGroupName)
     params: {
@@ -538,11 +622,28 @@ module createPrivateDnsZones 'br/public:avm/res/network/private-dns-zone:0.8.1' 
       location: 'global'
       virtualNetworkLinks: [
         {
-          virtualNetworkResourceId: enableCreateVirtualNetwork
+          virtualNetworkResourceId: deployVirtualNetwork
             ? createVirtualNetwork!.outputs.resourceId
             : sharedVirtualNetwork.id
         }
       ]
+      tags: resourceTags
+    }
+    dependsOn: [
+      createVirtualNetwork
+    ]
+  }
+]
+
+// Link the existing private DNS zones to the deployment's VNet, otherwise the Function App cannot resolve its private endpoints
+module linkSharedPrivateDnsZones 'br/public:avm/res/network/private-dns-zone/virtual-network-link:0.1.0' = [
+  for privateDnsZone in privateDnsZonesArray: if (!deployPrivateDnsZones && enablePrivateDnsZoneVnetLink) {
+    name: 'link-${replace(privateDnsZone, '.', '-')}-${locationShortCode}'
+    scope: resourceGroup(privateDnsZoneSubscriptionId, privateDnsZoneResourceGroupScope)
+    params: {
+      privateDnsZoneName: privateDnsZone
+      name: '${deployVirtualNetwork ? virtualNetworkName : existingVirtualNetworkName}-vnetlink'
+      virtualNetworkResourceId: deployVirtualNetwork ? createVirtualNetwork!.outputs.resourceId : sharedVirtualNetwork.id
       tags: resourceTags
     }
     dependsOn: [
@@ -575,13 +676,13 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
     privateEndpoints: [
       {
         service: 'vault'
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[0]!.outputs.resourceId
                 : privateDnsZoneKeyVault.id
             }
@@ -618,6 +719,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
   ]
 }
 
+// Create Storage Account for Acmebot package storage and Functions runtime state
 module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' = {
   name: 'create-storage-account-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -706,13 +808,13 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
     privateEndpoints: [
       {
         service: 'blob'
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[1]!.outputs.resourceId //blob
                 : privateDnsZoneStorageBlob.id
             }
@@ -721,13 +823,13 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
       }
       {
         service: 'file'
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[2]!.outputs.resourceId // file
                 : privateDnsZoneStorageFile.id
             }
@@ -736,13 +838,13 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
       }
       {
         service: 'table'
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[3]!.outputs.resourceId // table
                 : privateDnsZoneStorageTable.id
             }
@@ -751,13 +853,13 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
       }
       {
         service: 'queue'
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[4]!.outputs.resourceId // queue
                 : privateDnsZoneStorageQueue.id
             }
@@ -777,6 +879,7 @@ module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' =
   ]
 }
 
+// Create Log Analytics Workspace (shared destination for all diagnostic settings)
 module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
   name: 'create-log-analytics-workspace-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -795,6 +898,7 @@ module createLogAnalyticsWorkspace 'br/public:avm/res/operational-insights/works
   ]
 }
 
+// Create Application Insights (workspace-based)
 module createApplicationInsights 'br/public:avm/res/insights/component:0.8.0' = {
   name: 'create-application-insights-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -817,6 +921,7 @@ module createApplicationInsights 'br/public:avm/res/insights/component:0.8.0' = 
   ]
 }
 
+// Create App Service Plan (Linux Flex Consumption)
 module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
   name: 'create-app-service-plan-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -833,6 +938,7 @@ module createAppServicePlan 'br/public:avm/res/web/serverfarm:0.7.0' = {
   ]
 }
 
+// Create Function App (Acmebot runtime), with Entra auth, VNet integration and private endpoint
 module createFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
   name: 'create-function-app-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
@@ -848,7 +954,7 @@ module createFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
       applicationTraffic: true
       contentShareTraffic: true
     }
-    virtualNetworkSubnetResourceId: enableCreateVirtualNetwork
+    virtualNetworkSubnetResourceId: deployVirtualNetwork
       ? createVirtualNetwork!.outputs.subnetResourceIds[1]
       : existingVirtualNetworkSubnetAppService.id
     keyVaultAccessIdentityResourceId: createUserManagedIdentity[0].outputs.resourceId
@@ -979,13 +1085,13 @@ module createFunctionApp 'br/public:avm/res/web/site:0.24.0' = {
     }
     privateEndpoints: [
       {
-        subnetResourceId: enableCreateVirtualNetwork
+        subnetResourceId: deployVirtualNetwork
           ? createVirtualNetwork!.outputs.subnetResourceIds[0]
           : existingVirtualNetworkSubnetShared.id
         privateDnsZoneGroup: {
           privateDnsZoneGroupConfigs: [
             {
-              privateDnsZoneResourceId: enableCreateVirtualNetwork
+              privateDnsZoneResourceId: deployPrivateDnsZones
                 ? createPrivateDnsZones[5]!.outputs.resourceId
                 : privateDnsZoneAzureSites.id
             }
@@ -1011,6 +1117,7 @@ module deployFunctionAppPackage '../modules/app/site/extension/main.bicep' = {
   ]
 }
 
+// Grant the Acmebot managed identity DNS Zone Contributor on each public DNS zone (for ACME TXT challenges)
 module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
   for dnsZoneResourceId in azurePublicDnsZones: if (enablePublicDnsRoleAssignment) {
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'
@@ -1026,6 +1133,7 @@ module roleAssignmentPublicDnsZone 'br/public:avm/ptn/authorization/resource-rol
   }
 ]
 
+// Grant the Acmebot managed identity Private DNS Zone Contributor on each private DNS zone (for ACME TXT challenges)
 module roleAssignmentPrivateDnsZone 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = [
   for dnsZoneResourceId in azurePrivateDnsZones: if (enablePrivateDnsRoleAssignment) {
     name: 'rbac-${uniqueString(dnsZoneResourceId)}-${locationShortCode}'

@@ -8,17 +8,21 @@ param functionAppName string
 @minLength(1)
 param acmebotReleaseTag string = 'latest'
 
+@description('Acmebot release tag normalized to a "v"-prefixed GitHub release tag')
 var normalizedReleaseTag = startsWith(toLower(acmebotReleaseTag), 'v')
   ? acmebotReleaseTag
   : 'v${acmebotReleaseTag}'
 
+@description('Resolved release tag: "latest" or the normalized pinned tag')
 var releaseTag = toLower(acmebotReleaseTag) == 'latest'
   ? 'latest'
   : normalizedReleaseTag
 
+@description('GitHub release download URL for the Acmebot package')
 #disable-next-line no-hardcoded-env-urls
 var appPackageUri = 'https://github.com/polymind-inc/acmebot/releases/download/${releaseTag}/acmebot.zip'
 
+// Redeploy the Acmebot package into the existing Function App
 module deployFunctionAppPackage '../modules/app/site/extension/main.bicep' = {
   scope: resourceGroup()
   params: {

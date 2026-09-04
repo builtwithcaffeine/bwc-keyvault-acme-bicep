@@ -85,7 +85,7 @@ function Get-AzCliVersion {
 
   # Get the latest release version from GitHub
   try {
-    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/azure-cli/releases/latest"
+    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/azure-cli/releases/latest" -TimeoutSec 10
     $latestVersion = $latestRelease.tag_name.TrimStart('azure-cli-')
   } catch {
     Write-Warning "Unable to fetch the latest release. Ensure you have internet connectivity."
@@ -152,7 +152,7 @@ function Get-BicepVersion {
 
   # Get the latest release version from GitHub
   try {
-    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/bicep/releases/latest"
+    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Azure/bicep/releases/latest" -TimeoutSec 10
     $latestVersion = $latestRelease.tag_name.TrimStart('v')
   } catch {
     Write-Warning "Unable to fetch the latest release. Ensure you have internet connectivity."

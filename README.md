@@ -1,69 +1,154 @@
 # Azure Key Vault ACME Certificate Management
 
-Production-ready Infrastructure as Code (IaC) for deploying an ACME-based certificate automation platform on Azure using Bicep.
+Production-ready Azure infrastructure for automating ACME certificate issuance and renewal with Bicep, Azure Functions, Key Vault, managed identity, private endpoints, and Azure DNS.
 
-This solution provisions a secure Function App + Key Vault pattern with private networking and managed identity, and supports both initial platform creation and package-only Acmebot updates.
+This repository contains a public, repeatable deployment baseline. It supports three network topologies: a self-contained environment, a hub-and-spoke deployment, and deployment into an existing network.
 
----
+## What this provides
 
-## Why this repo exists
+- Automated ACME certificate issuance and renewal through Acmebot
+- Certificates stored in Azure Key Vault
+- Azure DNS public and private DNS-01 challenge support
+- Private endpoints for Key Vault, Storage, and the Function App
+- Managed identity authentication without storage connection strings
+- Optional hub-and-spoke peering and cross-subscription resource references
+- Application Insights and Log Analytics integration
+- Repeatable deployment with Bicep and PowerShell
 
-This repo gives platform teams a practical, auditable baseline for:
+## Deployed resources
 
-- Secure certificate lifecycle automation at scale
-- Key Vault-centric certificate storage and renewal
-- Public + private DNS challenge support
-- Repeatable deployment via Bicep and PowerShell
+The create flow provisions:
 
-It is intentionally opinionated toward enterprise-friendly defaults (private endpoints, managed identity, monitoring, and explicit DNS RBAC).
+- Resource group
+- User-assigned managed identities
+- Key Vault
+- Storage Account and private endpoints
+- Log Analytics workspace
+- Workspace-based Application Insights
+- Linux Flex Consumption Function App running .NET Isolated Acmebot
+- Acmebot package through OneDeploy
+- Microsoft Entra security group, app registration, federated identity credential, and service principal
+- Optional Virtual Network, subnets, Network Security Group, private DNS zones, and hub peering
 
----
+## Network topologies
 
-## What gets deployed
+Set `networkTopology` in `infra/create/param.main.bicepparam` to one of these values:
 
-- Resource Group
-- User Assigned Managed Identity
-- Key Vault (+ private endpoint)
-- Storage Account (+ private endpoints for blob/file/table/queue)
-- Log Analytics Workspace
-- Application Insights (workspace-based)
-- Azure Functions (Linux Flex Consumption, .NET Isolated)
-- Acmebot package deployment via `onedeploy`
-- Microsoft Entra resources (via Graph Bicep extension):
-  - Security Group
-  - App Registration
-  - Federated Identity Credential
-  - Service Principal
-- Optional (when `enableCreateVirtualNetwork = true`):
-  - Virtual Network + subnets
-  - Network Security Group (associated to both subnets)
-- Optional (when `enableCreatePrivateDnsZones = true`):
-  - Private DNS zones
-- Optional:
-  - DNS role assignments for Public/Private DNS
+| Value | Network | Private DNS | Use when |
+| --- | --- | --- | --- |
+| `standalone` | Creates a new VNet and two subnets | Creates six private DNS zones in the workload resource group | The environment is self-contained |
+| `hubSpoke` | Creates a new spoke VNet and bidirectionally peers it to `sharedHub` | Uses existing zones in `privateDnsZoneResourceGroupName` and links them to the spoke | A central hub owns networking and private DNS |
+| `existing` | Uses an existing VNet and two existing subnets | Uses existing zones and links them to the VNet | Networking is managed outside this deployment |
+
+### Parameter groups
+
+- `spoke*` — address space and subnet prefixes for `standalone` and `hubSpoke`
+- `sharedHub*` — subscription, resource group, and VNet name for `hubSpoke`
+- `existing*` — subscription, resource group, VNet, private endpoint subnet, and App Service subnet for `existing`
+- `privateDnsZone*` — subscription and resource group containing the six existing `privatelink.*` zones for `hubSpoke` and `existing`
+
+Parameters for other topologies remain in the single example file but are ignored by the selected topology. Keep them accurate if you switch topology during testing.
+
+For `hubSpoke`, the spoke address space must not overlap the hub address space. The deployment identity needs permission to create the spoke, private DNS links, and the reverse peering in the hub subscription.
+
+For `existing`, the private endpoint subnet must allow private endpoints and the App Service subnet must already be delegated to `Microsoft.App/environments` and be at least `/27` for Flex Consumption. Existing subnet and NSG configuration is not changed by this deployment.
+
+## Deployment scope
+
+`infra/create/main.bicep` uses `targetScope = 'subscription'`. Use the create wrapper with `-targetScope sub` and provide `-subscriptionId` for the subscription containing the workload resource group.
+
+The wrapper contains generic management-group and tenant scope handling, but those scopes are not supported by the current create entrypoint. They require a template whose `targetScope` matches the selected deployment scope.
+
+## Quick start
+
+### Prerequisites
+
+- Azure subscription access to the workload subscription
+- Microsoft Entra permissions for the Graph-backed resources
+- Permission to create or reference resources in hub and private DNS subscriptions
+- Azure CLI with Bicep support
+- PowerShell 7+
+
+### 1. Configure parameters
+
+Review `infra/create/param.main.bicepparam` and set:
+
+- `customerName`, `environmentType`, `location`, and `locationShortCode`
+- `networkTopology`
+- The relevant `spoke*`, `sharedHub*`, `existing*`, and `privateDnsZone*` values
+- `azurePublicDnsZones` and optional `azurePrivateDnsZones`
+- `acmeContacts`, `acmeEndpoint`, and `acmeBotRenewBeforeExpiry`
+- `acmebotReleaseTag` (`latest` or a pinned version such as `5.1.4`)
+
+For hub/spoke deployments, verify that all six private DNS zones already exist in the configured private DNS subscription and resource group.
+
+### 2. Validate and preview
+
+Run the wrapper from any directory. Its default template and parameter paths resolve from `infra/create`:
+
+```powershell
+.\infra\create\Invoke-AzDeployment.ps1 `
+  -targetScope sub `
+  -subscriptionId "<subscription-guid>" `
+  -customerName "bwc" `
+  -environmentType "dev" `
+  -location "westeurope"
+```
+
+The wrapper checks Azure CLI and Bicep, authenticates, displays identity and RBAC information, and runs an Azure `what-if`. Add `-deploy` only after reviewing the preview.
+
+```powershell
+.\infra\create\Invoke-AzDeployment.ps1 `
+  -targetScope sub `
+  -subscriptionId "<subscription-guid>" `
+  -customerName "bwc" `
+  -environmentType "prod" `
+  -location "westeurope" `
+  -deploy
+```
+
+The wrapper also supports PowerShell's `-WhatIf` and `-Confirm` common parameters, plus service-principal authentication for scripted use.
+
+### 3. Update Acmebot
+
+After the platform exists, use `infra/update/` to redeploy only the Acmebot package. This does not recreate the Function App, Key Vault, networking, or supporting resources.
 
 ## Deployment flow
 
-- `infra/create/` provisions the full platform and deploys Acmebot during the initial build
-- `infra/update/` redeploys only the Acmebot package into an existing Function App
-- Both flows use the same `acmebotReleaseTag` convention: `latest`, `5.0.0`, or `v5.0.0`
+- `infra/create/` creates the full platform and deploys Acmebot
+- `infra/update/` redeploys the Acmebot package into an existing Function App
+- Both flows use `acmebotReleaseTag`: `latest`, `5.0.0`, or `v5.0.0`
+- The release-check workflow monitors upstream Acmebot releases and opens an update pull request
 
----
+## Operations checklist
 
-## High-level architecture
+After deployment:
 
-```mermaid
-flowchart LR
-  U[User / Automation] --> A[Function App: Acmebot]
-  A -->|MI auth| KV[Azure Key Vault]
-  A --> SA[Storage Account]
-  A --> DNS[Azure DNS / Private DNS]
-  A --> AI[App Insights]
-  AI --> LAW[Log Analytics Workspace]
-  Entra[Entra App + SP + FIC] --> A
+- Enable and enforce Function App Authentication through Microsoft Entra ID
+- Verify public and private DNS zone discovery and TXT write/delete permissions
+- Issue a test certificate using an ACME staging endpoint first
+- Confirm the certificate appears in Key Vault
+- Confirm renewal execution and failures in Application Insights
+- Confirm private endpoint DNS resolution from the integrated Function App network
+
+Useful checks:
+
+```powershell
+az deployment sub list --query "[0].{name:name,state:properties.provisioningState,timestamp:properties.timestamp}" -o table
+az functionapp config appsettings list -g <resource-group> -n <function-app-name> -o table
+az network private-dns link vnet list -g <private-dns-resource-group> -z privatelink.vaultcore.azure.net -o table
 ```
 
----
+## Security and design notes
+
+- Keep DNS credentials and secrets out of source control.
+- Azure DNS role assignments use explicit subscription and resource group scopes.
+- Storage uses managed identity authentication; shared key access is disabled and no connection strings are exported.
+- Storage uses infrastructure encryption for double-layer at-rest encryption.
+- Key Vault uses access policies rather than RBAC to preserve Application Gateway certificate compatibility.
+- Key Vault soft delete is enabled for 90 days. Purge protection is intentionally disabled so certificates can be force-purged and re-issued under the same name; evaluate this trade-off before enabling it.
+- The Acmebot package is downloaded from the upstream GitHub release and deployed with OneDeploy. Pin a release for controlled production rollouts.
+- Cross-subscription deployments require appropriate permissions in every referenced subscription.
 
 ## Project structure
 
@@ -82,140 +167,35 @@ flowchart LR
 │  │  ├─ Invoke-AzDeployment.ps1
 │  │  ├─ main.bicep
 │  │  └─ param.main.bicepparam
-│  └─ modules/
-│     ├─ app/site/extension/
-│     └─ microsoft-graph/
+│  ├─ modules/
+│  │  ├─ app/site/extension/
+│  │  └─ microsoft-graph/
+│  └─ ...
 └─ scripts/
-  ├─ linux/
-  │  ├─ README.md
-  │  └─ Invoke-KeyVaultCertRenewal.sh
-  └─ windows/
-    ├─ README.md
-    └─ Invoke-KeyVaultCertRenewal.ps1
+   ├─ linux/
+   └─ windows/
 ```
-
----
-
-## Quick start
-
-### Prerequisites
-
-- Azure subscription permissions to deploy resources
-- Microsoft Entra permissions for Graph-backed resources
-- Azure CLI + Bicep CLI
-- PowerShell 7+
-
-### 1) Review `infra/create/param.main.bicepparam`
-
-Key settings to validate first:
-
-- `customerName`, `environmentType`, `location`
-- `sharedResourceGroupName`
-- `enableCreateVirtualNetwork`, `enableCreatePrivateDnsZones`
-- `azurePublicDnsZones`, `azurePrivateDnsZones`
-- `acmeContacts`
-- `acmeEndpoint`
-- `acmeBotRenewBeforeExpiry` (percentage of certificate lifetime remaining, 0–100, default 30)
-- `acmeBotUseSystemNameServer` (default `false`, useful for private DNS resolver scenarios)
-- `virtualNetworkSubnetAppService` (must be at least `/27` for Flex Consumption)
-- `acmebotReleaseTag` (shared by create/update; set `latest` or a pinned version like `5.0.0`)
-
-For package redeployments, see `infra/update/Invoke-AzDeployment.ps1` and `infra/update/param.main.bicepparam`; the same `acmebotReleaseTag` convention applies.
-
-Supported ACME endpoints in this template:
-
-- Let's Encrypt: `https://acme-v02.api.letsencrypt.org/directory`
-- Buypass: `https://api.buypass.com/acme/directory`
-- GlobalSign: `https://emea.acme.atlas.globalsign.com/directory`
-- ZeroSSL: `https://acme.zerossl.com/v2/DV90`
-- Google Trust Services: `https://dv.acme-v02.api.pki.goog/directory`
-- SSL.com RSA: `https://acme.ssl.com/sslcom-dv-rsa`
-- SSL.com ECC: `https://acme.ssl.com/sslcom-dv-ecc`
-
-### 2) Deploy
-
-Run from `infra/create/`:
-
-```powershell
-.\Invoke-AzDeployment.ps1 `
-  -targetScope sub `
-  -subscriptionId "<subscription-guid>" `
-  -customerName "bwc" `
-  -environmentType "prod" `
-  -location "westeurope" `
-  -deploy
-```
-
-The script runs a `what-if` first and prompts before applying changes.
-
----
 
 ## Continuous integration
 
-- [Validate Bicep](.github/workflows/validate-bicep.yml) runs on every PR/push touching `infra/**.bicep` or `.bicepparam`: builds both deployment entrypoints, builds every module individually, and validates all parameter files. Also runs [PSRule for Azure](.github/ps-rule.yaml) (`Azure.Default` baseline) against `infra/`, with the two documented Key Vault deviations (RBAC, purge protection) explicitly excluded.
-- `main` requires the `validate` and `psrule` checks to pass before merging.
-- [Renovate](.github/renovate.json) tracks `br/public:avm/...` Bicep module versions; [Dependabot](.github/dependabot.yml) tracks GitHub Actions versions. [Check Acmebot Release](.github/workflows/check-acmebot-release.yml) separately tracks upstream Acmebot releases.
-- A failed `validate-bicep` run on `main` (i.e. a merged change that broke the build) automatically opens a tracking issue.
+- `validate-bicep.yml` builds the create and update entrypoints, modules, and parameter files.
+- PSRule for Azure runs against `infra/` using the `Azure.Default` baseline.
+- Renovate tracks AVM Bicep module versions.
+- Dependabot tracks GitHub Actions versions.
+- `check-acmebot-release.yml` monitors upstream Acmebot releases.
 
----
+## Related documentation
 
-## Operations checklist
-
-After deployment:
-
-- Enable and enforce App Service Authentication (dashboard/API)
-- Verify DNS zone discovery and TXT write/delete permissions
-- Issue a test certificate (prefer staging endpoint first)
-- Confirm cert appears in Key Vault
-- Confirm renewals and logs in Application Insights
-
-Helpful checks:
-
-```powershell
-az deployment sub list --query "[0].{name:name,state:properties.provisioningState,timestamp:properties.timestamp}" -o table
-az functionapp config appsettings list -g <resource-group> -n <function-app-name> -o table
-```
-
----
-
-## Security notes
-
-- Keep DNS credentials and secrets out of source control
-- Storage Account uses managed identity authentication — shared key access is disabled (`allowSharedKeyAccess: false`); no connection strings are stored or exported
-- Storage Account uses infrastructure encryption (`requireInfrastructureEncryption: true`) for double-layer at-rest encryption
-
-- For private DNS-heavy environments, consider setting `acmeBotUseSystemNameServer = true`
-- Restrict dashboard/API access via Entra and app roles where appropriate
-
----
-
-## Known design choices in this repo
-
-- This repo deploys the latest release asset from GitHub using `onedeploy`.
-- DNS role assignment modules support cross-subscription scopes via explicit subscription parameters
-- The baseline is tuned for Azure public cloud and Acmebot v5 behavior
-- Key Vault uses Access Policies (not RBAC) to preserve compatibility with Application Gateway certificate integration
-- Key Vault soft delete is enabled with a 90-day retention period; purge protection is intentionally left disabled so certificates can be force-purged and re-issued under the same name without waiting out the retention window. Once purge protection is enabled it cannot be turned off again, so weigh this trade-off before flipping it on for a given vault.
-- NSG is only created when `enableCreateVirtualNetwork = true`; when using an existing VNet, NSG management is assumed to be handled by the existing network
-- `dependsOn` helpers are intentionally retained for readability and the linter rule is disabled in `infra/bicepconfig.json`
-
----
-
-## Related docs in this repository
-
-- `infra/create/README.md`
-- `infra/update/README.md`
-- `infra/modules/app/site/extension/README.md`
-- `infra/modules/microsoft-graph/readme.md`
-- `infra/modules/microsoft-graph/*/README.md`
-- `scripts/linux/README.md`
-- `scripts/windows/README.md`
-
----
+- [Create deployment](infra/create/README.md)
+- [Update deployment](infra/update/README.md)
+- [OneDeploy module](infra/modules/app/site/extension/README.md)
+- [Microsoft Graph modules](infra/modules/microsoft-graph/readme.md)
+- [Linux renewal script](scripts/linux/README.md)
+- [Windows renewal script](scripts/windows/README.md)
 
 ## Upstream references
 
-- Acmebot project: [polymind-inc/acmebot](https://github.com/polymind-inc/acmebot)
-- Acmebot docs: [Acmebot guide](https://acmebot.dev/guide/)
-- Acmebot configuration reference: [Acmebot configuration reference](https://acmebot.dev/reference/configuration)
-- Azure Bicep docs: [Azure Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
+- [Acmebot project](https://github.com/polymind-inc/acmebot)
+- [Acmebot guide](https://acmebot.dev/guide/)
+- [Acmebot configuration reference](https://acmebot.dev/reference/configuration)
+- [Azure Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/)
