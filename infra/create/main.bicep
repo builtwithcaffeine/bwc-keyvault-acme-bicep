@@ -334,13 +334,13 @@ resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' exi
 }
 
 @description('The existing private endpoint subnet, used by the existing topology')
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-09-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingSubnetPrivateEndpointName
 }
 
 @description('The existing App Service subnet, used by the existing topology')
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-09-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingSubnetAppServiceName
 }
