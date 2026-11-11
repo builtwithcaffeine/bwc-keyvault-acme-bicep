@@ -70,7 +70,7 @@ param azurePrivateDnsZones = [
 
 // Deploy the latest GitHub release asset by default.
 // Set this to 'latest', '5.0.0', or 'v5.0.0' when you want to pin a release.
-param acmebotReleaseTag = '5.1.5'
+param acmebotReleaseTag = '5.1.6'
 
 // @description('ACME Azure Public DNS Subscription ID')
 param acmeAzurePublicDnsSubscriptionId = subscriptionId
