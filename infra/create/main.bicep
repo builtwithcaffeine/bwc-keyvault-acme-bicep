@@ -29,12 +29,15 @@ param deployedBy string
 @description('Additional resource tags. Values override the CAF-aligned baseline tags.')
 param tags object = {}
 
-var resourceTags = union({
-  environmentType: environmentType
-  workload: 'kvacme'
-  managedBy: 'Bicep'
-  deployedBy: deployedBy
-}, tags)
+var resourceTags = union(
+  {
+    environmentType: environmentType
+    workload: 'kvacme'
+    managedBy: 'Bicep'
+    deployedBy: deployedBy
+  },
+  tags
+)
 
 //
 // Parameters [Created Resources]
@@ -310,37 +313,37 @@ var gitHubFederationSubject = gitHubFederationSubjectType == 'branch'
 
 @description('Private Dns Zones Array Variable')
 var privateDnsZonesArray = [
-  'privatelink.vaultcore.azure.net'                       // [0]
-  'privatelink.blob.${environment().suffixes.storage}'    // [1]
-  'privatelink.file.${environment().suffixes.storage}'    // [2]
-  'privatelink.table.${environment().suffixes.storage}'   // [3]
-  'privatelink.queue.${environment().suffixes.storage}'   // [4]
-  'privatelink.azurewebsites.net'                         // [5]
+  'privatelink.vaultcore.azure.net' // [0]
+  'privatelink.blob.${environment().suffixes.storage}' // [1]
+  'privatelink.file.${environment().suffixes.storage}' // [2]
+  'privatelink.table.${environment().suffixes.storage}' // [3]
+  'privatelink.queue.${environment().suffixes.storage}' // [4]
+  'privatelink.azurewebsites.net' // [5]
 ]
 
 //
 // Azure Resource - [Existing]
 
 @description('The shared hub Virtual Network, used by the hubSpoke topology for peering')
-resource existingSharedHubVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (peerToSharedHub) {
+resource existingSharedHubVirtualNetwork 'Microsoft.Network/virtualNetworks@2026-03-01' existing = if (peerToSharedHub) {
   scope: resourceGroup(sharedHubSubscriptionId, sharedHubResourceGroupScope)
   name: sharedHubVirtualNetworkName
 }
 
 @description('The existing Virtual Network, used by the existing topology')
-resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2025-07-01' existing = if (!deployVirtualNetwork) {
+resource sharedVirtualNetwork 'Microsoft.Network/virtualNetworks@2026-03-01' existing = if (!deployVirtualNetwork) {
   scope: resourceGroup(existingSubscriptionId, existingResourceGroupScope)
   name: existingVirtualNetworkName
 }
 
 @description('The existing private endpoint subnet, used by the existing topology')
-resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
+resource existingVirtualNetworkSubnetShared 'Microsoft.Network/virtualNetworks/subnets@2026-03-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingSubnetPrivateEndpointName
 }
 
 @description('The existing App Service subnet, used by the existing topology')
-resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2025-07-01' existing = if (!deployVirtualNetwork) {
+resource existingVirtualNetworkSubnetAppService 'Microsoft.Network/virtualNetworks/subnets@2026-03-01' existing = if (!deployVirtualNetwork) {
   parent: sharedVirtualNetwork
   name: existingSubnetAppServiceName
 }
@@ -502,7 +505,6 @@ module createServicePrincipal '../modules/microsoft-graph/servicePrincipals/main
     homepage: 'https://${functionAppName}.azurewebsites.net'
     accountEnabled: true
     appRoleAssignmentRequired: true
-
   }
   dependsOn: [
     createAppRegistration
@@ -555,7 +557,7 @@ module createGitHubActionsFederatedCredential '../modules/identity/federatedIden
 }
 
 // Create Network Security Group (associated to both subnets below)
-module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.3' = if (deployVirtualNetwork) {
+module createNetworkSecurityGroup 'br/public:avm/res/network/network-security-group:0.5.4' = if (deployVirtualNetwork) {
   name: 'create-network-security-group-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -643,7 +645,9 @@ module linkSharedPrivateDnsZones 'br/public:avm/res/network/private-dns-zone/vir
     params: {
       privateDnsZoneName: privateDnsZone
       name: '${deployVirtualNetwork ? virtualNetworkName : existingVirtualNetworkName}-vnetlink'
-      virtualNetworkResourceId: deployVirtualNetwork ? createVirtualNetwork!.outputs.resourceId : sharedVirtualNetwork.id
+      virtualNetworkResourceId: deployVirtualNetwork
+        ? createVirtualNetwork!.outputs.resourceId
+        : sharedVirtualNetwork.id
       tags: resourceTags
     }
     dependsOn: [
@@ -653,7 +657,7 @@ module linkSharedPrivateDnsZones 'br/public:avm/res/network/private-dns-zone/vir
 ]
 
 // Create Key Vault
-module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
+module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.2' = {
   name: 'create-keyvault-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
@@ -720,7 +724,7 @@ module createKeyVault 'br/public:avm/res/key-vault/vault:0.14.0' = {
 }
 
 // Create Storage Account for Acmebot package storage and Functions runtime state
-module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.0' = {
+module createStorageAccount 'br/public:avm/res/storage/storage-account:0.33.1' = {
   name: 'create-storage-account-${locationShortCode}'
   scope: resourceGroup(resourceGroupName)
   params: {
