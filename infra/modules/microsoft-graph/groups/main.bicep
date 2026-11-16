@@ -99,7 +99,7 @@ var membersConfig = !empty(memberIds)
 extension microsoftGraphV1
 
 @description('Microsoft Graph Group')
-resource group 'Microsoft.Graph/groups@v1.0' = {
+resource staticGroup 'Microsoft.Graph/groups@v1.0' = if (empty(membershipRule)) {
   uniqueName: groupName
   displayName: displayName
   description: !empty(groupDescription) ? groupDescription : null
@@ -114,11 +114,31 @@ resource group 'Microsoft.Graph/groups@v1.0' = {
   preferredLanguage: !empty(preferredLanguage) ? preferredLanguage : null
   preferredDataLocation: !empty(preferredDataLocation) ? preferredDataLocation : null
   theme: !empty(theme) ? theme : null
-  membershipRule: !empty(membershipRule) ? membershipRule : null
-  membershipRuleProcessingState: !empty(membershipRule) ? membershipRuleProcessingState : null
   owners: ownersConfig
   members: membersConfig
 }
+
+resource dynamicGroup 'Microsoft.Graph/groups@v1.0' = if (!empty(membershipRule)) {
+  uniqueName: groupName
+  displayName: displayName
+  description: !empty(groupDescription) ? groupDescription : null
+  mailNickname: mailNickname
+  mailEnabled: mailEnabled
+  securityEnabled: securityEnabled
+  groupTypes: groupTypes
+  isAssignableToRole: isAssignableToRole ? isAssignableToRole : null
+  visibility: contains(groupTypes, 'Unified') ? visibility : null
+  classification: !empty(classification) ? classification : null
+  preferredLanguage: !empty(preferredLanguage) ? preferredLanguage : null
+  preferredDataLocation: !empty(preferredDataLocation) ? preferredDataLocation : null
+  theme: !empty(theme) ? theme : null
+  membershipRule: membershipRule
+  membershipRuleProcessingState: membershipRuleProcessingState
+  owners: ownersConfig
+  members: membersConfig
+}
+
+var group = empty(membershipRule) ? staticGroup! : dynamicGroup!
 
 // ========== OUTPUTS ==========
 

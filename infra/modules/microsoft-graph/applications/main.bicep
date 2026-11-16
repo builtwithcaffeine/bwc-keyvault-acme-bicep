@@ -245,7 +245,7 @@ resource application 'Microsoft.Graph/applications@v1.0' = {
   publicClient: publicClientConfig
   api: apiConfig
   optionalClaims: !empty(optionalClaims) ? optionalClaims : null
-  owners: !empty(ownerIds) ? ownersConfig : null
+  owners: ownersConfig
 }
 
 // ========== OUTPUTS ==========
