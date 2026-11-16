@@ -42,6 +42,11 @@ This module creates Microsoft Entra ID (Azure AD) groups using the Microsoft Gra
 | `ownerIds` | `array` | `[]` | Owner object IDs |
 | `memberIds` | `array` | `[]` | Member object IDs |
 
+When `membershipRule` is empty, the module omits both dynamic-membership properties
+from the Graph request rather than sending `null`. Static groups do not need those
+properties. Dynamic group deployments remain subject to the
+[Microsoft Graph Bicep app-only deployment limitation](https://learn.microsoft.com/graph/templates/bicep/known-issues-graph-bicep#deployment-error-app-only-deployment-fails-when-property-membershiprule-is-declared-on-a-group).
+
 ## Outputs
 
 | Name | Type | Description |

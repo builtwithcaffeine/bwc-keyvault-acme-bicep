@@ -32,6 +32,10 @@ Creates Microsoft Entra application registrations through the Microsoft Graph Bi
 
 See `main.bicep` for full advanced parameters (token settings, optional claims, SAML/native auth, etc.).
 
+Owners use an append relationship object, including when `ownerIds` is empty.
+An empty list preserves existing owners and avoids passing a null relationship
+to the Microsoft Graph Bicep extension.
+
 ## Outputs
 
 - `resourceId`
